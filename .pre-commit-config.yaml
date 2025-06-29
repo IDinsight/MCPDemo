@@ -1,0 +1,74 @@
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v5.0.0  # Use the revision sha / tag you want to point at
+  hooks:
+    - id: check-yaml
+      args: [ "--unsafe" ]
+      exclude: ^(backend/tests/fixtures|frontend/tests)
+    - id: end-of-file-fixer
+    - id: trailing-whitespace
+
+# Black
+-   repo: https://github.com/psf/black
+    rev: 25.1.0  # Use the revision sha / tag you want to point at
+    hooks:
+    - id: black
+      additional_dependencies: ["toml"]
+      files: ^backend/.*\.py$
+      language_version: python3.11
+
+# Detect secrets
+-   repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+    -   id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: '(frontend/pnpm-lock\.yaml|\.template\.env$)'
+
+# Env variables
+- repo: local
+  hooks:
+    -   id: env-template-sync
+        entry: python scripts/tools/check_env_template.py
+        name: Ensure .template.env and .env matches each other
+        language: python
+        pass_filenames: false
+
+# Isort
+-   repo: https://github.com/pycqa/isort
+    rev: 6.0.0  # Use the revision sha / tag you want to point at
+    hooks:
+    -   id: isort
+        args: ["--profile", "black"]
+        additional_dependencies: ["toml"]
+        files: ^backend/.*\.py$
+
+# Interrogate
+-   repo: https://github.com/econchick/interrogate
+    rev: 1.7.0 # Use the revision sha / tag you want to point at
+    hooks:
+      - id: interrogate
+        args: [--fail-under=100, -v]
+        exclude: ^(backend/tests|.*__init__\.py$)
+        files: ^backend/.*\.py$
+
+# Mypy
+-   repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+    - id: mypy
+      additional_dependencies:
+        - pydantic[mypy]
+        - types-aiofiles
+        - types-requests
+      args: [--ignore-missing-imports,--show-error-codes]
+      exclude: ^(backend/tests)
+      files: ^backend/.*\.py$
+
+# Ruff
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.9.6 # Use the revision sha / tag you want to point at
+  hooks:
+    - id: ruff
+      args: [--fix, --exit-non-zero-on-fix]
+      files: ^backend/.*\.py$

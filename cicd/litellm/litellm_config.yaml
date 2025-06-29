@@ -1,0 +1,41 @@
+# Define all credentials here for centralized management.
+credential_list:
+  - credential_name: default_openai_credential
+    credential_info:
+      description": "Default OpenAI credentials for all models."
+    credential_values:
+      api_key: "os.environ/OPENAI_API_KEY"  # pragma: allowlist secret
+
+# General LiteLLM settings.
+litellm_settings:
+  drop_params: True
+  num_retries: 3
+  json_logs: True
+  request_timeout: 10
+  set_verbose: False
+  telemetry: False
+
+# Define all models here.
+model_list:
+  # Do NOT change the model name for chat unless you really know what you are doing since it is used in the backend code!
+  - model_name: chat
+    litellm_params:
+      litellm_credential_name: default_openai_credential
+      model: gpt-4o
+
+  - model_name: default
+    litellm_params:
+      litellm_credential_name: default_openai_credential
+      model: gpt-4o
+
+  - model_name: embedding
+    litellm_params:
+      litellm_credential_name: default_openai_credential
+      model: text-embedding-3-large
+
+# Define router settings here.
+router_settings:
+  num_retries: 3
+  # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  routing_strategy: "simple-shuffle"
+  timeout: 30
