@@ -21,6 +21,7 @@ from redis import asyncio as aioredis
 from mcp_demo import users
 from mcp_demo.config import Settings
 from mcp_demo.prometheus_middleware import PrometheusMiddleware
+from mcp_demo.tools import math_tools
 from mcp_demo.utils.general import make_dir
 from mcp_demo.utils.logging_ import initialize_logger
 
@@ -110,6 +111,7 @@ def create_mcp_server() -> FastMCP:
     The process is as follows:
 
     1. Create an MCP server instance with the specified host, lifespan, name, and port.
+    2. Register all tools with the MCP server.
 
     Returns
     -------
@@ -125,6 +127,9 @@ def create_mcp_server() -> FastMCP:
         name="MCP Demo Server",
         port=FASTMCP_PORT,
     )
+
+    # 2.
+    math_tools.register_tools(mcp=mcp)
 
     return mcp
 

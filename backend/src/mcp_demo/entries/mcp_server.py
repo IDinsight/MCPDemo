@@ -18,8 +18,6 @@ from pathlib import Path
 # Third Party Library
 import typer
 
-from mcp.server.fastmcp import Context
-
 # Append the framework path. NB: This is required if this entry point is invoked from
 # the command line. However, it is not necessary if it is imported from a pip install.
 if __name__ == "__main__":
@@ -44,23 +42,6 @@ mcp = create_mcp_server()
 logger = initialize_logger()
 
 FASTMCP_TRANSPORT_TYPE = Settings.FASTMCP_TRANSPORT_TYPE
-
-
-@mcp.tool()
-def add(a: int, b: int, ctx: Context) -> int:
-    """Add two numbers together"""
-
-    logger.debug(f"{dir(ctx) = }")
-    logger.debug(f"{ctx.request_context.meta = }")
-    logger.debug(f"{ctx.request_context.request_id = }")
-    logger.debug(f"{ctx.request_context.session.client_params = }")
-
-    assert (
-        ctx.request_context.lifespan_context.some_context
-        == "This is some context for the MCP server."
-    )
-
-    return a + b
 
 
 @cli.command()
