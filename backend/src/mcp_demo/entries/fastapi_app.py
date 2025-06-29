@@ -26,10 +26,10 @@ from uvicorn_worker import UvicornWorker
 # Append the framework path. NB: This is required if this entry point is invoked from
 # the command line. However, it is not necessary if it is imported from a pip install.
 if __name__ == "__main__":
-    package_path = Path(__file__).resolve().parents[2]
-    if package_path not in sys.path:
-        print(f"Appending '{package_path}' to system path...")
-        sys.path.append(str(package_path))
+    PACKAGE_PATH = Path(__file__).resolve().parents[2]
+    if PACKAGE_PATH not in sys.path:
+        print(f"Appending '{PACKAGE_PATH}' to system path...")
+        sys.path.append(str(PACKAGE_PATH))
 
 # Package Library
 from mcp_demo import create_fastapi_app
@@ -52,7 +52,7 @@ class Worker(UvicornWorker):
 
 
 @cli.command()
-def start(host: str = "0.0.0.0", port: int = 8000, reload: bool = True) -> None:
+def main(host: str = "0.0.0.0", port: int = 8000, reload: bool = True) -> None:
     """Start the FastAPI application using Uvicorn.
 
     The process is as follows:

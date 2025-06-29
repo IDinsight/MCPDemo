@@ -1,6 +1,6 @@
 """This module contains the main entry point for the MCP server.
 
-From the backend directory of this project, this entry point can be invoked frmo the
+From the backend directory of this project, this entry point can be invoked from the
 command line via:
 
 python -m src.mcp_demo.entries.mcp_server.py
@@ -8,82 +8,77 @@ python -m src.mcp_demo.entries.mcp_server.py
 or
 
 python -m src/mcp_demo/entries/mcp_server.py
-
-or
-
-uv run src/mcp_demo/entries/mcp_server.py
 """
 
 # Standard Library
-import os
 import sys
+
+from pathlib import Path
 
 # Third Party Library
 import typer
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context
 
 # Append the framework path. NB: This is required if this entry point is invoked from
 # the command line. However, it is not necessary if it is imported from a pip install.
 if __name__ == "__main__":
-    PATHS_PROJECT_DIR = os.getenv("PATHS_PROJECT_DIR", None)
-    assert PATHS_PROJECT_DIR
-    if PATHS_PROJECT_DIR not in sys.path:
-        print(f"Appending '{PATHS_PROJECT_DIR}' to system path...")
-        sys.path.append(str(PATHS_PROJECT_DIR))
+    PACKAGE_PATH = Path(__file__).resolve().parents[2]
+    if PACKAGE_PATH not in sys.path:
+        print(f"Appending '{PACKAGE_PATH}' to system path...")
+        sys.path.append(str(PACKAGE_PATH))
 
 # Package Library
+from mcp_demo import create_mcp_server
+from mcp_demo.config import Settings
 from mcp_demo.utils.logging_ import initialize_logger
+
+assert (
+    sys.version_info.major >= 3 and sys.version_info.minor >= 11
+), "MCP Demo requires at least Python 3.11!"
 
 # Instantiate typer apps for the command line interface.
 cli = typer.Typer()
 
+mcp = create_mcp_server()
 logger = initialize_logger()
 
-# This object must exist in the global scope of this module. It is the MCP server
-# instance that will be used to run the MCP server. Valid names are either "mcp",
-# "server", or "app".
-# Create an MCP server
-mcp = FastMCP(
-    name="Calculator",
-    host="0.0.0.0",  # only used for SSE transport (localhost)
-    port=8050,  # only used for SSE transport (set this to any port)
-)
+FASTMCP_TRANSPORT_TYPE = Settings.FASTMCP_TRANSPORT_TYPE
 
 
-# Add a simple calculator tool
 @mcp.tool()
-def add(a: int, b: int) -> int:
+def add(a: int, b: int, ctx: Context) -> int:
     """Add two numbers together"""
+
+    logger.debug(f"{dir(ctx) = }")
+    logger.debug(f"{ctx.request_context.meta = }")
+    logger.debug(f"{ctx.request_context.request_id = }")
+    logger.debug(f"{ctx.request_context.session.client_params = }")
+
+    assert (
+        ctx.request_context.lifespan_context.some_context
+        == "This is some context for the MCP server."
+    )
+
     return a + b
 
 
 @cli.command()
-def main(*, transport_type: str = "stdio") -> None:
+def main() -> None:
     """Start the main MCP server.
 
     The process is as follows:
 
-    1. XXX
-
-    Parameters
-    ----------
-    transport_type
-        The type of transport to use for the MCP server. Valid options are "sse" or
-        "stdio".
+    1. Run the MCP server with the specified transport type.
     """
 
-    if transport_type not in ["sse", "stdio"]:
-        raise ValueError(
-            f"Invalid transport type: {transport_type}. "
-            f"Valid options are 'sse' or 'stdio'."
-        )
+    logger.info(
+        f"Starting MCP server with transport type {FASTMCP_TRANSPORT_TYPE} 🤖..."
+    )
 
-    logger.info(f"Starting MCP server with transport type: {transport_type}")
-
-    mcp.run(transport=transport_type)
+    # 1.
+    mcp.run(transport=FASTMCP_TRANSPORT_TYPE)
 
 
-# Run the server
 if __name__ == "__main__":
     cli()

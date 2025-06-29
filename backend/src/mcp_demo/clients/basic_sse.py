@@ -12,28 +12,31 @@ uv run server.py
 import asyncio
 
 # Third Party Library
+from loguru import logger
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.types import TextContent
 
 
 async def main() -> None:
     """Main function to demonstrate the MCP client connecting to the server."""
 
     # Connect to the server using SSE
-    async with sse_client("http://localhost:8050/sse") as (read_stream, write_stream):
+    async with sse_client("http://localhost:8100/sse") as (read_stream, write_stream):
         async with ClientSession(read_stream, write_stream) as session:
             # Initialize the connection
             await session.initialize()
 
             # List available tools
             tools_result = await session.list_tools()
-            print("Available tools:")
+            logger.info("Available tools:")
             for tool in tools_result.tools:
-                print(f"  - {tool.name}: {tool.description}")
+                logger.info(f"  - {tool.name}: {tool.description}")
 
             # Call our calculator tool
             result = await session.call_tool("add", arguments={"a": 2, "b": 3})
-            print(f"2 + 3 = {result.content[0].text}")
+            assert isinstance(result.content[0], TextContent)
+            logger.info(f"2 + 3 = {result.content[0].text}")
 
 
 if __name__ == "__main__":

@@ -31,8 +31,11 @@ class BackendSettings(BaseSettings):
     # Logging
     LOGGING_LOG_LEVEL: str = "INFO"
 
-    # MCP
-    MCP_TRANSPORT_TYPE: Literal["sse", "stdio"] = "stdio"
+    # FastMCP
+    FASTMCP_DEBUG: bool = True
+    FASTMCP_HOST: str = "127.0.0.1"
+    FASTMCP_PORT: int = 8100
+    FASTMCP_TRANSPORT_TYPE: Literal["sse", "stdio", "streamable-http"] = "stdio"
 
     # Models
     MODELS_LLM: str = "openai/gpt-4o"

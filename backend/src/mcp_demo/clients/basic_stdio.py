@@ -12,8 +12,10 @@ uv run server.py
 import asyncio
 
 # Third Party Library
+from loguru import logger
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.types import TextContent
 
 
 async def main() -> None:
@@ -27,13 +29,14 @@ async def main() -> None:
 
             # List available tools
             tools_result = await session.list_tools()
-            print("Available tools:")
+            logger.info("Available tools:")
             for tool in tools_result.tools:
-                print(f"  - {tool.name}: {tool.description}")
+                logger.info(f"  - {tool.name}: {tool.description}")
 
             # Call our calculator tool
             result = await session.call_tool("add", arguments={"a": 2, "b": 3})
-            print(f"2 + 3 = {result.content[0].text}")
+            assert isinstance(result.content[0], TextContent)
+            logger.info(f"2 + 3 = {result.content[0].text}")
 
 
 if __name__ == "__main__":
