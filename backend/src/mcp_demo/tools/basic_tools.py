@@ -1,8 +1,36 @@
-"""This module provides mathematical tools for the MCP demo application."""
+"""This module contains examples of basic tools for the MCP demo application."""
 
 # Third Party Library
 from loguru import logger
 from mcp.server.fastmcp import Context, FastMCP
+from pydantic import BaseModel, Field
+
+
+def calculate_bmi(*, height: float, weight: float) -> float:
+    """Calculate Body Mass Index (BMI).
+
+    Parameters
+    ----------
+    height
+        The height in meters.
+    weight
+        The weight in kilograms.
+
+    Returns
+    -------
+    float
+        The calculated BMI.
+
+    Raises
+    ------
+    ValueError
+        If height is less than or equal to zero.
+    """
+
+    if height <= 0:
+        raise ValueError("Height must be greater than zero.")
+
+    return weight / (height**2)
 
 
 def register_tools(*, mcp: FastMCP) -> None:
@@ -13,8 +41,6 @@ def register_tools(*, mcp: FastMCP) -> None:
     mcp
         The MCP server instance to register the tools with.
     """
-
-    logger.info("Registering mathematical tools...")
 
     @mcp.tool()
     def add(*, a: int, b: int, ctx: Context) -> int:
@@ -42,7 +68,7 @@ def register_tools(*, mcp: FastMCP) -> None:
 
         assert (
             ctx.request_context.lifespan_context.some_context
-            == "This is some context for the MCP server."
+            == "This is a demo MCP server context."
         )
 
         return a + b
@@ -64,6 +90,13 @@ def register_tools(*, mcp: FastMCP) -> None:
             The product of the two numbers.
         """
 
+        ctx = mcp.get_context()
+
+        assert (
+            ctx.request_context.lifespan_context.some_context  # type: ignore
+            == "This is a demo MCP server context."
+        )
+
         return a * b
 
     @mcp.tool()
@@ -84,3 +117,36 @@ def register_tools(*, mcp: FastMCP) -> None:
         """
 
         return a - b
+
+
+class WeatherData(BaseModel):
+    """Pydantic model for structured weather data."""
+
+    city: str
+    condition: str
+    humidity: float = Field(..., description="Humidity percentage.")
+    temperature: float = Field(..., description="Temperature in Celsius.")
+    wind_speed: float
+
+
+def get_weather(*, city: str) -> WeatherData:
+    """Get structured weather data.
+
+    Parameters
+    ----------
+    city
+        The name of the city to get the weather for.
+
+    Returns
+    -------
+    WeatherData
+        A Pydantic model containing the weather data for the specified city.
+    """
+
+    return WeatherData(
+        city=city,
+        condition="partly cloudy",
+        humidity=65.0,
+        temperature=22.5,
+        wind_speed=12.3,
+    )

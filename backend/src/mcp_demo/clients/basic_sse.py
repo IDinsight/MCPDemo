@@ -21,22 +21,35 @@ from mcp.types import TextContent
 async def main() -> None:
     """Main function to demonstrate the MCP client connecting to the server."""
 
-    # Connect to the server using SSE
-    async with sse_client("http://localhost:8100/sse") as (read_stream, write_stream):
+    # Connect to the server using SSE.
+    async with sse_client("http://localhost:8100/mcp") as (read_stream, write_stream):
         async with ClientSession(read_stream, write_stream) as session:
-            # Initialize the connection
+            # Initialize the connection.
             await session.initialize()
 
-            # List available tools
+            # List available tools on the server.
             tools_result = await session.list_tools()
             logger.info("Available tools:")
             for tool in tools_result.tools:
                 logger.info(f"  - {tool.name}: {tool.description}")
 
-            # Call our calculator tool
+            # Call various tools.
             result = await session.call_tool("add", arguments={"a": 2, "b": 3})
+            assert result.isError is False
             assert isinstance(result.content[0], TextContent)
             logger.info(f"2 + 3 = {result.content[0].text}")
+
+            result = await session.call_tool("multiply", arguments={"a": 2, "b": 3})
+            assert result.isError is False
+            assert isinstance(result.content[0], TextContent)
+            logger.info(f"2 * 3 = {result.content[0].text}")
+
+            result = await session.call_tool(
+                "get_weather", arguments={"city": "New York"}
+            )
+            assert result.isError is False
+            assert isinstance(result.content[0], TextContent)
+            logger.info(f"Weather data: {result.content[0].text}")
 
 
 if __name__ == "__main__":

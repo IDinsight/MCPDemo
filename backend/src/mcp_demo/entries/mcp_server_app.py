@@ -1,13 +1,13 @@
-"""This module contains the main entry point for the FastAPI application.
+"""This module contains the main entry point for the MCP server application.
 
 From the backend directory of this project, this entry point can be invoked from the
 command line via:
 
-python -m src.mcp_demo.entries.fastapi_app
+python -m src.mcp_demo.entries.mcp_server_app
 
 or
 
-python src/mcp_demo/entries/fastapi_app.py
+python src/mcp_demo/entries/mcp_server_app.py
 """
 
 # Standard Library
@@ -31,7 +31,7 @@ if __name__ == "__main__":
         sys.path.append(str(PACKAGE_PATH))
 
 # Package Library
-from mcp_demo import create_fastapi_app
+from mcp_demo import create_mcp_server_app
 from mcp_demo.config import Settings
 
 assert (
@@ -41,16 +41,22 @@ assert (
 # Instantiate typer apps for the command line interface.
 cli = typer.Typer()
 
-app = create_fastapi_app()
+# app = create_mcp_server_app()
+app = create_mcp_server_app()
+
+FASTMCP_HOST = Settings.FASTMCP_HOST
+FASTMCP_PORT = Settings.FASTMCP_PORT
 
 
 @cli.command()
-def main(host: str = "0.0.0.0", port: int = 8000, reload: bool = True) -> None:
-    """Start the FastAPI application using Uvicorn.
+def main(
+    host: str = FASTMCP_HOST, port: int = FASTMCP_PORT, reload: bool = True
+) -> None:
+    """Start the MCP server application using Uvicorn.
 
     The process is as follows:
 
-    1. Run the FastAPI application using Uvicorn.
+    1. Run the MCP server application using Uvicorn.
 
     Parameters
     ----------
@@ -63,13 +69,13 @@ def main(host: str = "0.0.0.0", port: int = 8000, reload: bool = True) -> None:
         detected.
     """
 
-    logger.info("Starting FastAPI with Uvicorn 🦄...")
+    logger.info("Starting MCP server with Uvicorn 🦄...")
 
     # 1.
     project_dir = Path(os.getenv("PATHS_PROJECT_DIR", ""))
     assert project_dir.is_dir(), f"'{project_dir}' is not a directory."
     uvicorn.run(
-        "mcp_demo.entries.fastapi_app:app",
+        "mcp_demo.entries.mcp_server_app:app",
         host=host,
         port=port,
         log_config=None,  # Disable Uvicorn's default logging config

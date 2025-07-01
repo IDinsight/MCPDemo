@@ -13,22 +13,20 @@ import sentry_sdk
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from prometheus_client import CollectorRegistry, make_asgi_app, multiprocess
 from redis import asyncio as aioredis
+from starlette.applications import Starlette
 
 # Package Library
 from mcp_demo import users
 from mcp_demo.config import Settings
 from mcp_demo.prometheus_middleware import PrometheusMiddleware
-from mcp_demo.tools import math_tools
+from mcp_demo.tools import basic_tools
 from mcp_demo.utils.general import make_dir
 from mcp_demo.utils.logging_ import initialize_logger
 
 DOMAIN_NAME = os.getenv("DOMAIN_NAME", "")
-FASTMCP_DEBUG = Settings.FASTMCP_DEBUG
-FASTMCP_HOST = Settings.FASTMCP_HOST
-FASTMCP_PORT = Settings.FASTMCP_PORT
 LOGGING_LEVEL = Settings.LOGGING_LOG_LEVEL
 REDIS_URL = Settings.REDIS_URL
 SENTRY_DSN = Settings.SENTRY_DSN
@@ -40,20 +38,23 @@ logger = initialize_logger(logging_level=LOGGING_LEVEL)
 
 @dataclass
 class MCPServerContext:
-    """Context for the MCP server."""
+    """Context for the MCP server application."""
 
-    some_context: str = "This is some context for the MCP server."
+    runtime_context: str
+
+    some_text: str = "This is a demo MCP server context."
 
 
 def create_fastapi_app() -> FastAPI:
     """Create the FastAPI application for the backend.
 
-    The process is as follows:
-
-    1. Include routers for all the endpoints.
-    2. Add CORS middleware for cross-origin requests.
-    3. Add Prometheus middleware for metrics.
-    4. Mount the metrics app on /metrics as an independent application.
+    1. Create a FastAPI application instance and attach the MCP server instance to its
+        state.
+    2. Include routers for all the endpoints.
+    3. Add CORS middleware for cross-origin requests.
+    4. Add Prometheus middleware for metrics.
+    5. Mount the metrics app on /metrics as an independent application.
+    6. Initialize Sentry for error tracking if the SENTRY_DSN is provided.
 
     Returns
     -------
@@ -61,6 +62,7 @@ def create_fastapi_app() -> FastAPI:
         The FastAPI application instance.
     """
 
+    # 1.
     app = FastAPI(
         debug=True,
         lifespan=lifespan_fastapi,
@@ -68,16 +70,15 @@ def create_fastapi_app() -> FastAPI:
         title="MCP Demo APIs",
     )
 
-    # 1.
+    # 2.
     app.include_router(users.routers.router)
 
+    # 3.
     origins = [
         f"http://{DOMAIN_NAME}",
         f"http://{DOMAIN_NAME}:3000",
         f"https://{DOMAIN_NAME}",
     ]
-
-    # 2.
     app.add_middleware(
         CORSMiddleware,
         allow_credentials=True,
@@ -86,13 +87,14 @@ def create_fastapi_app() -> FastAPI:
         allow_origins=origins,
     )
 
-    # 3.
-    app.add_middleware(PrometheusMiddleware)
-    metrics_app = create_metrics_app()
-
     # 4.
+    app.add_middleware(PrometheusMiddleware)
+
+    # 5.
+    metrics_app = create_metrics_app()
     app.mount("/metrics", metrics_app)
 
+    # 6.
     if not SENTRY_DSN or SENTRY_DSN == "" or SENTRY_DSN == "https://...":
         logger.log("ATTN", "No SENTRY_DSN provided. Sentry is disabled.")
     else:
@@ -105,33 +107,39 @@ def create_fastapi_app() -> FastAPI:
     return app
 
 
-def create_mcp_server() -> FastMCP:
-    """Create the MCP server instance for the backend.
+def create_mcp_server_app() -> Starlette:
+    """Create the MCP server application for the backend.
 
     The process is as follows:
 
-    1. Create an MCP server instance with the specified host, lifespan, name, and port.
-    2. Register all tools with the MCP server.
+    1. Create an MCP server application instance.
+    2. Register tools with the MCP server.
 
     Returns
     -------
-    FastMCP
-        The MCP server instance.
+    Starlette
+        The MCP server application instance.
     """
 
     # 1.
     mcp = FastMCP(
-        debug=FASTMCP_DEBUG,
-        host=FASTMCP_HOST,
+        instructions="This is a demo MCP server. Use the tools to interact with it.",
         lifespan=lifespan_mcp,
-        name="MCP Demo Server",
-        port=FASTMCP_PORT,
+        name="MCP Demo",
+        on_duplicate_prompts="replace",
+        on_duplicate_resources="warn",
+        on_duplicate_tools="error",
     )
+    app = mcp.http_app(path="/mcp")
 
     # 2.
-    math_tools.register_tools(mcp=mcp)
+    logger.info("Registering tools with the MCP server...")
+    basic_tools.register_tools(mcp=mcp)
+    mcp.tool()(basic_tools.calculate_bmi)
+    mcp.tool()(basic_tools.get_weather)
+    logger.success("Finished registering tools with the MCP server!")
 
-    return mcp
+    return app
 
 
 def create_metrics_app() -> Callable:
@@ -173,33 +181,35 @@ async def lifespan_fastapi(app: FastAPI) -> AsyncIterator[None]:
 
     make_dir(Path(os.getenv("PATHS_PROJECT_DIR", "/tmp")) / "logs" / "chat_sessions")
 
-    # 1.
-    logger.info("Initializing Redis client...")
-    app.state.redis = await aioredis.from_url(f"{REDIS_URL}", decode_responses=True)
-    logger.success("Redis connection established!")
+    try:
+        # 1.
+        logger.info("Initializing Redis client...")
 
-    # 2.
-    logger.log("CELEBRATE", "Ready to roll! 🚀")
+        app.state.redis = await aioredis.from_url(f"{REDIS_URL}", decode_responses=True)
+        logger.success("Redis connection established!")
 
-    yield
+        # 2.
+        logger.log("CELEBRATE", "Ready to roll! 🚀")
 
-    # 3.
-    logger.info("Closing Redis connection...")
-    await app.state.redis.close()
-    logger.success("Redis connection closed!")
+        yield
+    finally:
+        # 3.
+        logger.info("Closing Redis connection...")
+        await app.state.redis.aclose()
+        logger.success("Redis connection closed!")
 
-    logger.success("FastAPI application finished!")
+        logger.success("FastAPI application finished!")
 
 
 @asynccontextmanager
 async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
-    """Lifespan events for the MCP server.
+    """Lifespan events for the MCP server application.
 
     The process is as follows:
 
-    1. Initialize the MCP server context.
-    2. Yield control to the MCP server with the MCP server context.
-    3. Clean up the MCP server context when the server finishes.
+    1. Initialize the MCP server tools.
+    2. Yield control to the MCP server application.
+    3. Close the MCP server when the application finishes.
 
     Parameters
     ----------
@@ -209,25 +219,20 @@ async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
     Yields
     ------
     AsyncIterator[MCPServerContext]
-        A context manager that provides control to the MCP server with the MCP server
-        context.
+        A context manager that provides control to the MCP server application.
     """
 
-    logger.info("Starting MCP server...")
+    logger.info("Starting MCP server application...")
 
-    logger.debug(f"{dir(server) = }")
+    try:
+        # 1.
+        server_tools = await server.get_tools()
+        logger.debug(f"{list(server_tools.keys()) = }")
 
-    # 1.
-    logger.info("Initializing MCP server context...")
-    logger.success("MCP server context initialized!")
+        # 2.
+        logger.log("CELEBRATE", "Ready to roll! 🚀")
 
-    # 2.
-    logger.log("CELEBRATE", "Ready to roll! 🚀")
-
-    yield MCPServerContext()
-
-    # 3.
-    logger.info("Cleaning up MCP server context...")
-    logger.success("MCP server context cleaned up!")
-
-    logger.success("MCP server closed!")
+        yield MCPServerContext(runtime_context="new context")
+    finally:
+        # 3.
+        logger.success("MCP server application finished!")

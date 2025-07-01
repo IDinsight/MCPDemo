@@ -11,6 +11,6 @@ application.
 """
 
 # Package Library
-from mcp_demo.tools.math_tools import register_tools
+from mcp_demo.tools.basic_tools import register_tools
 
 __all__ = ["register_tools"]
