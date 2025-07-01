@@ -561,7 +561,7 @@ class AsyncChatSessionManager:
         assert conversation, "Got empty conversation for summarization!"
         messages = [
             {
-                "content": summarize_chat_history(convservation=conversation),
+                "content": summarize_chat_history(conversation=conversation),
                 "role": "user",
             }
         ]

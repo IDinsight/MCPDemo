@@ -12,6 +12,7 @@ python src/mcp_demo/entries/client_call.py
 
 # Standard Library
 import asyncio
+import json
 import sys
 
 from pathlib import Path
@@ -20,8 +21,10 @@ from pathlib import Path
 import typer
 
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 from fastmcp.utilities.mcp_config import MCPConfig, RemoteMCPServer
 from loguru import logger
+from mcp.types import TextContent
 
 # Append the framework path. NB: This is required if this entry point is invoked from
 # the command line. However, it is not necessary if it is imported from a pip install.
@@ -33,6 +36,12 @@ if __name__ == "__main__":
 
 # Package Library
 from mcp_demo.config import Settings
+from mcp_demo.utils.mcp_ import (
+    list_prompts,
+    list_resource_templates,
+    list_resources,
+    list_tools,
+)
 
 assert (
     sys.version_info.major >= 3 and sys.version_info.minor >= 11
@@ -65,6 +74,7 @@ async def _run_client(
         The transport type for the MCP client.
     """
 
+    # Use `MCPConfig` for multi-server client configurations.
     client: Client = Client(
         MCPConfig(
             mcpServers={
@@ -74,14 +84,81 @@ async def _run_client(
             }
         )
     )
+
+    # Also valid.
+    # client: Client = Client(f"http://{host}:{port}/{server_mount_path}")
     async with client:
-        tools = await client.list_tools()
-        tool_names = [tool.name for tool in tools]
-        logger.info(f"Available tools client-side: {tool_names}")
+        logger.success(
+            f"Connected to MCP server at {host}:{port}/{server_mount_path} using "
+            f"{transport} transport. Connection status: {client.is_connected()}"
+        )
+
+        # Basic server interaction.
+        await client.ping()
+        logger.log("CELEBRATE", "MCP server is reachable.")
+
+        # List available components.
+        await list_tools(client=client)
+        await list_resources(client=client)
+        await list_resource_templates(client=client)
+        await list_prompts(client=client)
 
         # Call tools.
-        bmi = await client.call_tool("calculate_bmi", {"height": 1.78, "weight": 72})
-        logger.info(f"BMI: {bmi}")
+        bmi_result = await client.call_tool(
+            "calculate_bmi", {"height": 1.78, "weight": 72}, timeout=60
+        )
+        assert isinstance(bmi_result[0], TextContent)
+        bmi_text = bmi_result[0].text
+        logger.debug(f"{bmi_result = }")
+        logger.info(f"BMI: {bmi_text}\n")
+
+        try:
+            await client.call_tool("deprecated_tool", {"a": 5, "b": 10})
+        except ToolError as e:
+            logger.warning(f"Calling deprecated tool result: {e}\n")
+
+        my_tool_add_result = await client.call_tool("my_tool_add", {"a": 5, "b": 10})
+        logger.info(f"{my_tool_add_result = }\n")
+
+        get_weather_result = await client.call_tool(
+            "get_weather", {"city": "Northville"}
+        )
+        logger.info(f"{get_weather_result = }\n")
+
+        # Read resources.
+        data_resource = await client.read_resource("data://3")
+        logger.debug(f"{data_resource = }")
+        assert isinstance(data_resource[0], TextContent)
+        data_resource_text = json.loads(data_resource[0].text)
+        logger.info(f"{data_resource_text = }\n")
+
+        search_resource = await client.read_resource("search://foobar")
+        assert isinstance(search_resource[0], TextContent)
+        search_resource_text = json.loads(search_resource[0].text)
+        logger.info(f"{search_resource_text = }\n")
+
+        # Read resource templates.
+        lookup_user_email = await client.read_resource(
+            "users://email/example@gmail.com"
+        )
+        assert isinstance(lookup_user_email[0], TextContent)
+        lookup_user_email_text = lookup_user_email[0].text
+        logger.info(f"{lookup_user_email_text = }\n")
+
+        lookup_user_name = await client.read_resource("users://name/foo")
+        assert isinstance(lookup_user_name[0], TextContent)
+        lookup_user_name_text = lookup_user_name[0].text
+        logger.info(f"{lookup_user_name_text = }\n")
+
+        # Get rendered prompts.
+        error_correction_result = await client.get_prompt(
+            "error_correction", {"error_info_str": "some complex error trace"}
+        )
+        assert isinstance(error_correction_result.messages[0], TextContent)
+        error_correction_prompt = error_correction_result.messages[0].content.text
+        logger.info(f"{error_correction_prompt = }\n")
+
+    logger.info(f"Client connection closed. Connection status: {client.is_connected()}")
 
 
 @cli.command()

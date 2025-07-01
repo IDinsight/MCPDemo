@@ -242,6 +242,20 @@ async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
         server_tool_names = list(server_tools.keys())
         logger.info(f"Available tools server-side: {server_tool_names}")
 
+        server_resources = await server.get_resources()
+        server_resource_names = list(server_resources.keys())
+        logger.info(f"Available resources server-side: {server_resource_names}")
+
+        server_resource_tempaltes = await server.get_resource_templates()
+        server_resource_template_names = list(server_resource_tempaltes.keys())
+        logger.info(
+            f"Available resource templates server-side: {server_resource_template_names}"
+        )
+
+        server_prompts = await server.get_prompts()
+        server_prompt_names = list(server_prompts.keys())
+        logger.info(f"Available prompts server-side: {server_prompt_names}")
+
         # 2.
         logger.info("Initializing Redis client...")
         redis_client = await aioredis.from_url(f"{REDIS_URL}", decode_responses=True)

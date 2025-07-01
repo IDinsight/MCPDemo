@@ -24,7 +24,6 @@ class ATool:
 
         self.name = name
 
-    @mcp.tool()
     async def my_tool_add(self, *, a: float, b: float) -> float:
         """Add two numbers together.
 
@@ -45,6 +44,10 @@ class ATool:
         return a + b
 
 
+a_tool = ATool(name="A Tool")
+mcp.tool()(a_tool.my_tool_add)
+
+
 @mcp.tool()
 async def calculate_bmi(*, height: float, weight: float) -> float:
     """Async tool demonstration.
@@ -58,8 +61,8 @@ async def calculate_bmi(*, height: float, weight: float) -> float:
 
     Returns
     -------
-    float
-        The calculated BMI.
+    dict[str, float]
+        A dictionary containing the calculated BMI.
 
     Raises
     ------
@@ -68,7 +71,7 @@ async def calculate_bmi(*, height: float, weight: float) -> float:
     """
 
     ctx = get_context()
-    await ctx.info(f"{dir(ctx) = }")
+    await ctx.info(f"Calculating BMI for height: {height} m, weight: {weight} kg")
 
     if height <= 0:
         raise ValueError("Height must be greater than zero.")
