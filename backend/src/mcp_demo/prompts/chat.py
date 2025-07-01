@@ -1,23 +1,23 @@
 """This module contains the prompts used for chat."""
 
-# Third Party Library
-from dotmap import DotMap
-
-# Package Library
-from mcp_demo.prompts.base import BasePrompts
+# Standard Library
+from textwrap import dedent
 
 
-class ChatPrompts(BasePrompts):
-    """Chat prompts."""
+def summarize_chat_history(*, conversation: str) -> str:
+    """Summarizes the chat history for later use.
 
-    system_messages = DotMap(
-        {
-            **BasePrompts.system_messages,
-        }
-    )
-    prompts = DotMap(
-        {
-            **BasePrompts.prompts,
-            "summarize_chat_history": "Summarize the following conversation to be used as a prompt for continuing the conversation later:\n\n{conversation}",
-        }
+    Parameters
+    ----------
+    conversation
+        The string containing the chat history to be summarized.
+
+    Returns
+    -------
+    str
+        A formatted prompt string for summarizing the chat history.
+    """
+
+    return dedent(
+        f"""Summarize the following conversation to be used as a prompt for continuing the conversation later:\n\n{conversation}"""
     )

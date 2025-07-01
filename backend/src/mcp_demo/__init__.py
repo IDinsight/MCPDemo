@@ -28,6 +28,7 @@ from mcp_demo.utils.general import make_dir, yaml_serializer
 from mcp_demo.utils.logging_ import initialize_logger
 
 DOMAIN_NAME = os.getenv("DOMAIN_NAME", "")
+FASTMCP_MOUNT_PATH = Settings.FASTMCP_MOUNT_PATH
 LOGGING_LEVEL = Settings.LOGGING_LOG_LEVEL
 REDIS_URL = Settings.REDIS_URL
 SENTRY_DSN = Settings.SENTRY_DSN
@@ -137,12 +138,12 @@ def create_mcp_server_app() -> Starlette:
             lifespan=lifespan_mcp,
             mask_error_details=True,  # Mask error details in responses and defer to ToolError for security reasons
             name="MCP Demo",
-            on_duplicate_prompts="replace",
-            on_duplicate_resources="warn",
+            on_duplicate_prompts="error",
+            on_duplicate_resources="error",
             on_duplicate_tools="error",
             tool_serializer=yaml_serializer,
         )
-        MCP_APP = MCP_SERVER.http_app(path="/mcp")
+        MCP_APP = MCP_SERVER.http_app(path=f"/{FASTMCP_MOUNT_PATH}")
 
     # 2.
     register_server_components()
@@ -269,13 +270,44 @@ def register_server_components() -> None:
 
     NB: The use of `import_module` allows for dynamic loading of modules, which avoids
     circular import issues that can arise with direct imports.
+
+    NB: This function demonstrates how to manually register prompts with the MCP server
+    using the `prompt()` method. In this scenario, there is a circular import issue if
+    the `MCP_SERVER` object is imported directly in the `prompts` module. To get around
+    this issue, we specify in the `__init__.py` of the `prompts` module the set of
+    prompts to be registered, and then we import them here for registration. Also note
+    that due to the way Python and Uvicorn initialize, the initialization is called
+    twice. For module-level imports, this is not an issue---in fact, it serves as a
+    good sanity check against your code! However, for the `prompt()` method, `FastMCP`
+    will raise a `ValueError` if the prompt is already registered. Therefore, we catch
+    the `ValueError` and log a message indicating that the prompt is already registered.
+
+    NB: This repo is **purposely** architected to set up a circular import issue---this
+    occurs because the MCP server instance is initialized in the same module as the
+    FastAPI instance (i.e., this module). Although it's relatively straightforward to
+    avoid the circular import issue by moving the MCP server initialization to a
+    separate module, we want to demonstrate how to handle such issues in a real-world
+    scenario, especially if one is integrating with an existing codebase.
     """
 
     logger.info("Registering components with the MCP server...")
+
     for attr_path in [
         "mcp_demo.resources.basic_resources",
         "mcp_demo.tools.basic_tools",
     ]:
         logger.log("ATTN", f"Importing path for registration: {attr_path}")
         import_module(attr_path)
+
+    assert isinstance(MCP_SERVER, FastMCP)
+    prompts_module = import_module("mcp_demo.prompts")
+    for prompt_fn in prompts_module.__all__:
+        logger.log("ATTN", f"Importing path for registration: {prompt_fn}")
+        try:
+            MCP_SERVER.prompt(getattr(prompts_module, prompt_fn))
+        except ValueError:
+            logger.info(
+                f"Prompt {prompt_fn} already registered with the MCP server. Skipping."
+            )
+
     logger.success("Successfully all registered components with the MCP server!")

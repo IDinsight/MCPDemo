@@ -24,7 +24,7 @@ from loguru import logger
 
 # Package Library
 from mcp_demo.config import Settings
-from mcp_demo.prompts.chat import ChatPrompts
+from mcp_demo.prompts.chat import summarize_chat_history
 from mcp_demo.utils.general import convert_to_list
 from mcp_demo.utils.litellm_ import get_acompletion
 
@@ -561,10 +561,7 @@ class AsyncChatSessionManager:
         assert conversation, "Got empty conversation for summarization!"
         messages = [
             {
-                "content": format_prompt(
-                    prompt=ChatPrompts.prompts["summarize_chat_history"],
-                    prompt_kws={"conversation": conversation},
-                ),
+                "content": summarize_chat_history(convservation=conversation),
                 "role": "user",
             }
         ]

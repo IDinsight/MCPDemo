@@ -34,8 +34,9 @@ class BackendSettings(BaseSettings):
     # FastMCP
     FASTMCP_DEBUG: bool = True
     FASTMCP_HOST: str = "127.0.0.1"
+    FASTMCP_MOUNT_PATH: str = "mcp"
     FASTMCP_PORT: int = 8100
-    FASTMCP_TRANSPORT_TYPE: Literal["sse", "stdio", "streamable-http"] = "stdio"
+    FASTMCP_TRANSPORT_TYPE: Literal["http", "sse", "stdio", "streamable-http"] = "http"
 
     # Models
     MODELS_LLM: str = "openai/gpt-4o"

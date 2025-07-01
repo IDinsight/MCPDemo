@@ -25,7 +25,7 @@ from tenacity import (
 
 # Package Library
 from mcp_demo.config import Settings
-from mcp_demo.prompts.base import BasePrompts
+from mcp_demo.prompts.base import error_correction
 from mcp_demo.schemas import Limits, ValidatorCall
 from mcp_demo.utils.general import convert_to_list, remove_json_markdown
 
@@ -275,7 +275,7 @@ def _update_messages_with_errors(
     new_messages.append({"content": original_assistant_content, "role": "assistant"})
     new_messages.append(
         {
-            "content": BasePrompts.prompts["error_correction"].format(
+            "content": error_correction(
                 error_info_str=json.dumps(error_info, indent=2)
             ),
             "role": "user",
