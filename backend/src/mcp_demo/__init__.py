@@ -1,10 +1,12 @@
 """This module contains the FastAPI application for the backend."""
 
+# pylint: disable=W0603
 # Standard Library
 import os
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
@@ -22,8 +24,7 @@ from starlette.applications import Starlette
 from mcp_demo import users
 from mcp_demo.config import Settings
 from mcp_demo.prometheus_middleware import PrometheusMiddleware
-from mcp_demo.tools import basic_tools
-from mcp_demo.utils.general import make_dir
+from mcp_demo.utils.general import make_dir, yaml_serializer
 from mcp_demo.utils.logging_ import initialize_logger
 
 DOMAIN_NAME = os.getenv("DOMAIN_NAME", "")
@@ -31,6 +32,9 @@ LOGGING_LEVEL = Settings.LOGGING_LOG_LEVEL
 REDIS_URL = Settings.REDIS_URL
 SENTRY_DSN = Settings.SENTRY_DSN
 SENTRY_TRACES_SAMPLE_RATE = Settings.SENTRY_TRACES_SAMPLE_RATE
+
+MCP_APP: Starlette | None = None
+MCP_SERVER: FastMCP | None = None
 
 # Only need to initialize loguru once for the entire backend!
 logger = initialize_logger(logging_level=LOGGING_LEVEL)
@@ -40,6 +44,7 @@ logger = initialize_logger(logging_level=LOGGING_LEVEL)
 class MCPServerContext:
     """Context for the MCP server application."""
 
+    redis_client: aioredis.Redis
     runtime_context: str
 
     some_text: str = "This is a demo MCP server context."
@@ -113,7 +118,8 @@ def create_mcp_server_app() -> Starlette:
     The process is as follows:
 
     1. Create an MCP server application instance.
-    2. Register tools with the MCP server.
+    2. Register server components such as tools, resources, prompts, etc. with the MCP
+        server.
 
     Returns
     -------
@@ -121,25 +127,27 @@ def create_mcp_server_app() -> Starlette:
         The MCP server application instance.
     """
 
-    # 1.
-    mcp = FastMCP(
-        instructions="This is a demo MCP server. Use the tools to interact with it.",
-        lifespan=lifespan_mcp,
-        name="MCP Demo",
-        on_duplicate_prompts="replace",
-        on_duplicate_resources="warn",
-        on_duplicate_tools="error",
-    )
-    app = mcp.http_app(path="/mcp")
+    global MCP_APP, MCP_SERVER
+
+    if not (MCP_APP and MCP_SERVER):
+        # 1.
+        MCP_SERVER = FastMCP(
+            exclude_tags={"deprecated", "internal"},  # Hide these tagged components
+            instructions="This is a demo MCP server. Use the tools to interact with it.",
+            lifespan=lifespan_mcp,
+            mask_error_details=True,  # Mask error details in responses and defer to ToolError for security reasons
+            name="MCP Demo",
+            on_duplicate_prompts="replace",
+            on_duplicate_resources="warn",
+            on_duplicate_tools="error",
+            tool_serializer=yaml_serializer,
+        )
+        MCP_APP = MCP_SERVER.http_app(path="/mcp")
 
     # 2.
-    logger.info("Registering tools with the MCP server...")
-    basic_tools.register_tools(mcp=mcp)
-    mcp.tool()(basic_tools.calculate_bmi)
-    mcp.tool()(basic_tools.get_weather)
-    logger.success("Finished registering tools with the MCP server!")
+    register_server_components()
 
-    return app
+    return MCP_APP
 
 
 def create_metrics_app() -> Callable:
@@ -162,9 +170,9 @@ async def lifespan_fastapi(app: FastAPI) -> AsyncIterator[None]:
 
     The process is as follows:
 
-    1. Connect to Redis.
+    1. Initialize Redis client for the FastAPI application.
     2. Yield control to the FastAPI application.
-    3. Close the Redis connection when the application finishes.
+    3. Close the Redis connection when the FastAPI application finishes.
 
     Parameters
     ----------
@@ -184,7 +192,6 @@ async def lifespan_fastapi(app: FastAPI) -> AsyncIterator[None]:
     try:
         # 1.
         logger.info("Initializing Redis client...")
-
         app.state.redis = await aioredis.from_url(f"{REDIS_URL}", decode_responses=True)
         logger.success("Redis connection established!")
 
@@ -207,9 +214,11 @@ async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
 
     The process is as follows:
 
-    1. Initialize the MCP server tools.
-    2. Yield control to the MCP server application.
-    3. Close the MCP server when the application finishes.
+    1. List the MCP server tools (for demonstration purposes).
+    2. Initialize Redis client for the MCP server.
+    3. Yield control to the MCP server application.
+    4. Close the Redis connection when the MCP server application finishes.
+    5. Close the MCP server when the application finishes.
 
     Parameters
     ----------
@@ -224,15 +233,49 @@ async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
 
     logger.info("Starting MCP server application...")
 
+    redis_client: aioredis.Redis | None = None
+
     try:
         # 1.
         server_tools = await server.get_tools()
-        logger.debug(f"{list(server_tools.keys()) = }")
+        server_tool_names = list(server_tools.keys())
+        logger.info(f"Available tools server-side: {server_tool_names}")
 
         # 2.
+        logger.info("Initializing Redis client...")
+        redis_client = await aioredis.from_url(f"{REDIS_URL}", decode_responses=True)
+        assert isinstance(redis_client, aioredis.Redis)
+        logger.success("Redis connection established!")
+
+        # 3.
         logger.log("CELEBRATE", "Ready to roll! 🚀")
 
-        yield MCPServerContext(runtime_context="new context")
+        yield MCPServerContext(redis_client=redis_client, runtime_context="new context")
     finally:
-        # 3.
+        if isinstance(redis_client, aioredis.Redis):
+            # 4.
+            logger.info("Closing Redis connection...")
+            await redis_client.aclose()
+            logger.success("Redis connection closed!")
+
+        # 5.
         logger.success("MCP server application finished!")
+
+
+def register_server_components() -> None:
+    """Register service components such as tools, resources, prompts, etc. with the MCP
+    server. This is accomplished by importing the relevant modules, thereby loading any
+    `@mcp` decorators within those modules.
+
+    NB: The use of `import_module` allows for dynamic loading of modules, which avoids
+    circular import issues that can arise with direct imports.
+    """
+
+    logger.info("Registering components with the MCP server...")
+    for attr_path in [
+        "mcp_demo.resources.basic_resources",
+        "mcp_demo.tools.basic_tools",
+    ]:
+        logger.log("ATTN", f"Importing path for registration: {attr_path}")
+        import_module(attr_path)
+    logger.success("Successfully all registered components with the MCP server!")

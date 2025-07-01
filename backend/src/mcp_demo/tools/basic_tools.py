@@ -1,13 +1,53 @@
 """This module contains examples of basic tools for the MCP demo application."""
 
 # Third Party Library
+from fastmcp.exceptions import ToolError
+from fastmcp.server.dependencies import get_context
 from loguru import logger
-from mcp.server.fastmcp import Context, FastMCP
-from pydantic import BaseModel, Field
+
+# Package Library
+from mcp_demo import MCP_SERVER as mcp
+from mcp_demo.tools.schemas import WeatherData
 
 
-def calculate_bmi(*, height: float, weight: float) -> float:
-    """Calculate Body Mass Index (BMI).
+class ATool:
+    """A simple tool class to demonstrate tool registration for individual methods."""
+
+    def __init__(self, *, name: str) -> None:
+        """Initialize the tool.
+
+        Parameters
+        ----------
+        name
+            The name of the tool.
+        """
+
+        self.name = name
+
+    @mcp.tool()
+    async def my_tool_add(self, *, a: float, b: float) -> float:
+        """Add two numbers together.
+
+        Parameters
+        ----------
+        a
+            The first number to add.
+        b
+            The second number to add.
+
+        Returns
+        -------
+        float
+            The sum of the two numbers.
+        """
+
+        logger.debug(f"{self.name} = ")
+        return a + b
+
+
+@mcp.tool()
+async def calculate_bmi(*, height: float, weight: float) -> float:
+    """Async tool demonstration.
 
     Parameters
     ----------
@@ -27,110 +67,96 @@ def calculate_bmi(*, height: float, weight: float) -> float:
         If height is less than or equal to zero.
     """
 
+    ctx = get_context()
+    await ctx.info(f"{dir(ctx) = }")
+
     if height <= 0:
         raise ValueError("Height must be greater than zero.")
 
     return weight / (height**2)
 
 
-def register_tools(*, mcp: FastMCP) -> None:
-    """Register the mathematical tools with the MCP server.
+@mcp.tool(tags={"deprecated"})
+def deprecated_tool(*, a: int, b: int) -> int:
+    """A deprecated tool that should not be used.
 
     Parameters
     ----------
-    mcp
-        The MCP server instance to register the tools with.
+    a
+        The first number to add.
+    b
+        The second number to add.
+
+    Returns
+    -------
+    int
+        The sum of the two numbers.
     """
 
-    @mcp.tool()
-    def add(*, a: int, b: int, ctx: Context) -> int:
-        """Add two numbers together.
-
-        Parameters
-        ----------
-        a
-            The first number to add.
-        b
-            The second number to add.
-        ctx
-            The context of the request, which includes metadata and lifespan context.
-
-        Returns
-        -------
-        int
-            The sum of the two numbers.
-        """
-
-        logger.debug(f"{dir(ctx) = }")
-        logger.debug(f"{ctx.request_context.meta = }")
-        logger.debug(f"{ctx.request_context.request_id = }")
-        logger.debug(f"{ctx.request_context.session.client_params = }")
-
-        assert (
-            ctx.request_context.lifespan_context.some_context
-            == "This is a demo MCP server context."
-        )
-
-        return a + b
-
-    @mcp.tool()
-    def multiply(*, a: int, b: int) -> int:
-        """Multiply two numbers.
-
-        Parameters
-        ----------
-        a
-            The first number to multiply.
-        b
-            The second number to multiply.
-
-        Returns
-        -------
-        int
-            The product of the two numbers.
-        """
-
-        ctx = mcp.get_context()
-
-        assert (
-            ctx.request_context.lifespan_context.some_context  # type: ignore
-            == "This is a demo MCP server context."
-        )
-
-        return a * b
-
-    @mcp.tool()
-    def subtract(*, a: int, b: int) -> int:
-        """Subtract two numbers.
-
-        Parameters
-        ----------
-        a
-            The first number to subtract.
-        b
-            The second number to subtract.
-
-        Returns
-        -------
-        int
-            The difference of the two numbers.
-        """
-
-        return a - b
+    logger.warning("This tool is deprecated and should not be used.")
+    return a + b
 
 
-class WeatherData(BaseModel):
-    """Pydantic model for structured weather data."""
+@mcp.tool(enabled=False)
+async def disabled_tool(*, a: int, b: int) -> int:
+    """An internal tool that should not be listed.
 
-    city: str
-    condition: str
-    humidity: float = Field(..., description="Humidity percentage.")
-    temperature: float = Field(..., description="Temperature in Celsius.")
-    wind_speed: float
+    Parameters
+    ----------
+    a
+        The first number to add.
+    b
+        The second number to add.
+
+    Returns
+    -------
+    int
+        The sum of the two numbers.
+    """
+
+    logger.debug("This is an internal tool and should not be listed.")
+    return a + b
 
 
+@mcp.tool()
+def divide_with_error_handling(*, a: int, b: int) -> float:
+    """Divide two numbers with error handling.
+
+    Parameters
+    ----------
+    a
+        The numerator.
+    b
+        The denominator.
+
+    Returns
+    -------
+    float
+        The result of the division.
+
+    Raises
+    ------
+    ToolError
+        If the denominator is zero.
+    TypeError
+        If either argument is not a number.
+    """
+
+    if b == 0:
+        # Error messages from ToolError are always sent to clients, regardless of
+        # `mask_error_details` setting when instantiating the MCP server.
+        raise ToolError("Division by zero is not allowed.")
+
+    # If mask_error_details=True, this message would be masked
+    if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+        raise TypeError("Both arguments must be numbers.")
+
+    return a / b
+
+
+@mcp.tool()
 def get_weather(*, city: str) -> WeatherData:
-    """Get structured weather data.
+    """Tool with structured output.
 
     Parameters
     ----------
@@ -150,3 +176,24 @@ def get_weather(*, city: str) -> WeatherData:
         temperature=22.5,
         wind_speed=12.3,
     )
+
+
+@mcp.tool(tags={"internal"})
+async def internal_tool(*, a: int, b: int) -> int:
+    """An internal tool that should not be listed.
+
+    Parameters
+    ----------
+    a
+        The first number to add.
+    b
+        The second number to add.
+
+    Returns
+    -------
+    int
+        The sum of the two numbers.
+    """
+
+    logger.debug("This is an internal tool and should not be listed.")
+    return a + b

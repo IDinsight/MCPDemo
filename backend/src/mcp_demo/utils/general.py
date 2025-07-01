@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 # Third Party Library
+import yaml
+
 from loguru import logger
 
 
@@ -125,3 +127,20 @@ def remove_json_markdown(*, text: str) -> str:
     text = re.sub(r"```(json)?\n", "", text).rstrip("```")
     text = text.replace(r"\{", "{").replace(r"\}", "}")
     return text.strip()
+
+
+def yaml_serializer(data: dict[str, Any]) -> str:
+    """Serialize a dictionary to a YAML string.
+
+    Parameters
+    ----------
+    data
+        The dictionary to serialize.
+
+    Returns
+    -------
+    str
+        The serialized YAML string.
+    """
+
+    return yaml.dump(data, sort_keys=True)

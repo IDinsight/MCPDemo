@@ -23,7 +23,8 @@ async def main() -> None:
     )
     async with client:
         tools = await client.list_tools()
-        logger.info(tools)
+        tool_names = [tool.name for tool in tools]
+        logger.info(f"Available tools client-side: {tool_names}")
 
         # Call tools.
         # res = await client.call_tool("add", {"a": 2, "b": 3})

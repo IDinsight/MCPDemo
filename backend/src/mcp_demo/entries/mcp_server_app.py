@@ -38,19 +38,18 @@ assert (
     sys.version_info.major >= 3 and sys.version_info.minor >= 11
 ), "MCP Demo requires at least Python 3.11!"
 
-# Instantiate typer apps for the command line interface.
-cli = typer.Typer()
-
-# app = create_mcp_server_app()
+# Create the MCP server application instance.
 app = create_mcp_server_app()
 
-FASTMCP_HOST = Settings.FASTMCP_HOST
-FASTMCP_PORT = Settings.FASTMCP_PORT
+# Instantiate typer apps for the command line interface.
+cli = typer.Typer()
 
 
 @cli.command()
 def main(
-    host: str = FASTMCP_HOST, port: int = FASTMCP_PORT, reload: bool = True
+    host: str = Settings.FASTMCP_HOST,
+    port: int = Settings.FASTMCP_PORT,
+    reload: bool = True,
 ) -> None:
     """Start the MCP server application using Uvicorn.
 
