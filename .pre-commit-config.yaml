@@ -60,6 +60,7 @@ repos:
       additional_dependencies:
         - pydantic[mypy]
         - types-aiofiles
+        - types-pyyaml
         - types-requests
       args: [--ignore-missing-imports,--show-error-codes]
       exclude: ^(backend/tests)

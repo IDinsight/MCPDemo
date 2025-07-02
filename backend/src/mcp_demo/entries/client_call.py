@@ -10,6 +10,7 @@ or
 python src/mcp_demo/entries/client_call.py
 """
 
+# pylint: disable=R0915
 # Standard Library
 import asyncio
 import json
@@ -21,10 +22,11 @@ from pathlib import Path
 import typer
 
 from fastmcp import Client
+from fastmcp.client.auth import BearerAuth
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.mcp_config import MCPConfig, RemoteMCPServer
 from loguru import logger
-from mcp.types import TextContent
+from mcp.types import PromptMessage, TextContent, TextResourceContents
 
 # Append the framework path. NB: This is required if this entry point is invoked from
 # the command line. However, it is not necessary if it is imported from a pip install.
@@ -36,7 +38,7 @@ if __name__ == "__main__":
 
 # Package Library
 from mcp_demo.config import Settings
-from mcp_demo.utils.mcp_ import (
+from mcp_demo.utils.mcp_client import (
     list_prompts,
     list_resource_templates,
     list_resources,
@@ -54,7 +56,7 @@ FASTMCP_DEBUG = Settings.FASTMCP_DEBUG
 FASTMCP_HOST = Settings.FASTMCP_HOST
 FASTMCP_MOUNT_PATH = Settings.FASTMCP_MOUNT_PATH
 FASTMCP_PORT = Settings.FASTMCP_PORT
-FASTMCP_TRANSPORT_TYPE = Settings.FASTMCP_TRANSPORT_TYPE
+FASTMCP_TRANSPORT = Settings.FASTMCP_TRANSPORT
 
 
 async def _run_client(
@@ -76,17 +78,20 @@ async def _run_client(
 
     # Use `MCPConfig` for multi-server client configurations.
     client: Client = Client(
-        MCPConfig(
+        transport=MCPConfig(  # type: ignore
             mcpServers={
                 "remote_server": RemoteMCPServer(
-                    transport=transport, url=f"http://{host}:{port}/{server_mount_path}"
+                    auth=BearerAuth(token=""),
+                    transport=transport,
+                    url=f"http://{host}:{port}/{server_mount_path}",
                 )
             }
-        )
+        ),
     )
 
     # Also valid.
     # client: Client = Client(f"http://{host}:{port}/{server_mount_path}")
+
     async with client:
         logger.success(
             f"Connected to MCP server at {host}:{port}/{server_mount_path} using "
@@ -125,15 +130,18 @@ async def _run_client(
         )
         logger.info(f"{get_weather_result = }\n")
 
+        user_agent_info_result = await client.call_tool("user_agent_info", {})
+        logger.info(f"{user_agent_info_result = }\n")
+
         # Read resources.
         data_resource = await client.read_resource("data://3")
         logger.debug(f"{data_resource = }")
-        assert isinstance(data_resource[0], TextContent)
+        assert isinstance(data_resource[0], TextResourceContents)
         data_resource_text = json.loads(data_resource[0].text)
         logger.info(f"{data_resource_text = }\n")
 
         search_resource = await client.read_resource("search://foobar")
-        assert isinstance(search_resource[0], TextContent)
+        assert isinstance(search_resource[0], TextResourceContents)
         search_resource_text = json.loads(search_resource[0].text)
         logger.info(f"{search_resource_text = }\n")
 
@@ -141,21 +149,31 @@ async def _run_client(
         lookup_user_email = await client.read_resource(
             "users://email/example@gmail.com"
         )
-        assert isinstance(lookup_user_email[0], TextContent)
+        assert isinstance(lookup_user_email[0], TextResourceContents)
         lookup_user_email_text = lookup_user_email[0].text
         logger.info(f"{lookup_user_email_text = }\n")
 
         lookup_user_name = await client.read_resource("users://name/foo")
-        assert isinstance(lookup_user_name[0], TextContent)
+        assert isinstance(lookup_user_name[0], TextResourceContents)
         lookup_user_name_text = lookup_user_name[0].text
         logger.info(f"{lookup_user_name_text = }\n")
 
-        # Get rendered prompts.
+        # Get prompts.
+        roleplay_scenario_result = await client.get_prompt(
+            "roleplay_scenario",
+            {"character": "Alice", "situation": "a complex problem"},
+        )
+        for message in roleplay_scenario_result.messages:
+            logger.info(f"Role: {message.role}")
+            logger.info(f"Content: {message.content}\n")
+
         error_correction_result = await client.get_prompt(
             "error_correction", {"error_info_str": "some complex error trace"}
         )
-        assert isinstance(error_correction_result.messages[0], TextContent)
-        error_correction_prompt = error_correction_result.messages[0].content.text
+        message = error_correction_result.messages[0]
+        assert isinstance(message, PromptMessage)
+        assert isinstance(message.content, TextContent)
+        error_correction_prompt = message.content.text
         logger.info(f"{error_correction_prompt = }\n")
 
     logger.info(f"Client connection closed. Connection status: {client.is_connected()}")
@@ -183,7 +201,7 @@ def main(
         show_default=True,
     ),
     transport: str = typer.Option(
-        FASTMCP_TRANSPORT_TYPE,
+        FASTMCP_TRANSPORT,
         "--transport",
         case_sensitive=True,
         help="The transport type for the MCP client.",

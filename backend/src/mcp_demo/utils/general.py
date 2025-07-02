@@ -7,15 +7,114 @@ instead.
 """
 
 # Standard Library
+import os
 import re
 
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 # Third Party Library
 import yaml
 
 from loguru import logger
+
+
+def atomic_write(
+    *,
+    data: bytes | str,
+    mode: str = "wb",
+    perm: int = 0o600,
+    target_fp: str | os.PathLike,
+) -> None:
+    """Atomically write `data` to `target`.
+
+    NB: On network filesystems (NFS) atomicity is **NOT** guaranteed. It is only
+    guaranteed on POSIX filesystems and Windows.
+
+    The process is as follows:
+
+    1. Create a temp file in the **same directory** as `target` so the final rename
+        stays on the filesystem.
+    2. Write, flush, and fsync the temp file.
+    3. Set restrictive permissions (default is rw-------). This is done after the
+        file is closed to avoid issues with open file descriptors.
+    4. Rename (os.replace) it over `target`.
+    5. fsync the directory containing `target` to ensure the rename is committed.
+    6. If replace failed, tidy up temp file.
+
+    Any exception before Step 3 leaves the original `target` untouched.
+
+    Parameters
+    ----------
+    data
+        The data to write to the target file. If `mode` is binary (`b`), then this
+        should be bytes-like data. If `mode` is text, then this should be a string.
+    mode
+        The mode in which to open the file. Defaults to `wb` (write binary). If you
+        want to write text, use `w` (write text). If you want to append, use `ab` or
+        `a` (append binary or text, respectively).
+    perm
+        The permissions to set on the target file after writing. Defaults to `0o600`
+        (read and write for the owner only).
+    target_fp
+        The target file path where the data should be written. This can be a string or
+        a `Path` object. The target file should not exist before calling this function.
+
+    Raises
+    ------
+    TypeError
+        If `mode` is binary (`b`) and `data` is not bytes-like, or if `mode` is text
+        and `data` is bytes-like.
+    OSError
+        If there is an error during file operations, such as writing, flushing, or
+        renaming the file.
+    """
+
+    if (
+        "b" in mode
+        and isinstance(data, str)
+        or "b" not in mode
+        and isinstance(data, bytes)
+    ):
+        raise TypeError(
+            f"Expected data to be {'bytes' if 'b' in mode else 'str'}, "
+            f"got {type(data).__name__}"
+        )
+
+    target_fp = Path(target_fp)
+    dir_ = target_fp.parent
+
+    # 1.
+    with NamedTemporaryFile(
+        dir=dir_, delete=False, encoding="utf-8" if "b" not in mode else None, mode=mode
+    ) as tmp:
+        # 2.
+        tmp_path = Path(tmp.name)
+        tmp.write(data)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+
+    # 3.
+    tmp_path.chmod(perm)
+
+    try:
+        # 4.
+        os.replace(tmp_path, target_fp)  # Atomic on POSIX & Windows
+
+        # 5.
+        dir_fd = os.open(str(dir_), os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)  # Flush directory metadata
+        finally:
+            os.close(dir_fd)  # Prevent FD leak
+    except OSError as e:
+        logger.error(f"Failed to replace {target_fp} with {tmp_path}: {e}")
+        raise OSError(f"Failed to replace {target_fp} with {tmp_path}") from e
+    finally:
+        # 6.
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 def convert_to_list(x: Any) -> list[Any]:
@@ -54,13 +153,16 @@ def escape_angle_brackets(x: Any) -> str:
     return recurse_replace(r"\>", ">", recurse_replace(r"\<", "<", str(x)))
 
 
-def make_dir(dir_: str | Path, verbose: bool = True) -> None:
+def make_dir(dir_: str | Path, mode: int = 0o777, verbose: bool = True) -> None:
     """Create a directory.
 
     Parameters
     ----------
     dir_
         Directory to create.
+    mode
+        The mode to set on the directory. Defaults to `0o777` (read, write, and
+        execute for everyone).
     verbose
         Specifies whether to log directory creation.
     """
@@ -69,7 +171,7 @@ def make_dir(dir_: str | Path, verbose: bool = True) -> None:
     if not Path.is_dir(dir_):
         if verbose:
             logger.info(f"Creating directory: {dir_}")
-        Path.mkdir(dir_, exist_ok=True, parents=True)
+        Path.mkdir(dir_, exist_ok=True, mode=mode, parents=True)
         if verbose:
             logger.success(f"Created directory: {dir_}")
 

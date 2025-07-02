@@ -1,8 +1,12 @@
 """This module contains examples of basic tools for the MCP demo application."""
 
+# Standard Library
+from typing import Any
+
 # Third Party Library
+from fastapi import Request
 from fastmcp.exceptions import ToolError
-from fastmcp.server.dependencies import get_context
+from fastmcp.server.dependencies import get_context, get_http_request
 from loguru import logger
 
 # Package Library
@@ -200,3 +204,23 @@ async def internal_tool(*, a: int, b: int) -> int:
 
     logger.debug("This is an internal tool and should not be listed.")
     return a + b
+
+
+@mcp.tool
+async def user_agent_info() -> dict[str, Any]:
+    """Return information about the user agent.
+
+    Returns
+    -------
+    dict[str, Any]
+        A dictionary containing the user agent, client IP, and request path.
+    """
+
+    # Get the HTTP request.
+    request: Request = get_http_request()
+
+    # Access request data.
+    user_agent = request.headers.get("user-agent", "Unknown")
+    client_ip = request.client.host if request.client else "Unknown"
+
+    return {"client_ip": client_ip, "path": request.url.path, "user_agent": user_agent}

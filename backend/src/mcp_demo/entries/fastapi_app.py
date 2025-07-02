@@ -45,7 +45,26 @@ app = create_fastapi_app()
 
 
 @cli.command()
-def main(host: str = "0.0.0.0", port: int = 8000, reload: bool = True) -> None:
+def main(
+    host: str = typer.Option(
+        "0.0.0.0",
+        "--host",
+        help="The host address to bind the server to.",
+        show_default=True,
+    ),
+    port: int = typer.Option(
+        8000,
+        "--port",
+        help="The port number to bind the server to.",
+        show_default=True,
+    ),
+    no_reload: bool = typer.Option(
+        False,
+        "--no-reload",
+        help="Specifies whether the server should automatically reload when changes are detected.",
+        show_default=True,
+    ),
+) -> None:
     """Start the FastAPI application using Uvicorn.
 
     The process is as follows:
@@ -58,7 +77,7 @@ def main(host: str = "0.0.0.0", port: int = 8000, reload: bool = True) -> None:
         The host address to bind the server to.
     port
         The port number to bind the server to.
-    reload
+    no_reload
         Specifies whether the server should automatically reload when changes are
         detected.
     """
@@ -74,7 +93,7 @@ def main(host: str = "0.0.0.0", port: int = 8000, reload: bool = True) -> None:
         port=port,
         log_config=None,  # Disable Uvicorn's default logging config
         log_level=Settings.LOGGING_LOG_LEVEL.lower(),
-        reload=reload,
+        reload=not no_reload,
         reload_dirs=[str(project_dir / "backend" / "src")],
         root_path=os.getenv("API_BACKEND_ROOT", ""),
     )

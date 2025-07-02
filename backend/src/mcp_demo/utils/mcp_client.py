@@ -1,4 +1,4 @@
-"""This module contains MCP utilities."""
+"""This module contains MCP client utilities."""
 
 # Third Party Library
 from fastmcp import Client

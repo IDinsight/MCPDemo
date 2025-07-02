@@ -16,6 +16,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class BackendSettings(BaseSettings):
     """Pydantic settings for backend."""
 
+    # Authentication
+    AUTH_AUDIENCE: str = "MCP_Demo_Server"
+    AUTH_FILELOCK_TIMEOUT: int = 2
+    AUTH_JWK_ALGORITHM: str = "RS256"
+    AUTH_JWKS_FN: str = "jwks.json"
+    AUTH_JWKS_URI: str = "http://localhost:8001/jwks.json"
+    AUTH_ROTATION_KEEP_LAST_N: int = 2
+    AUTH_RSA_KEY_SIZE: int = Field(3072, ge=1024)
+    AUTH_RSA_PUBLIC_EXPONENT: int = Field(65537, ge=3, le=65537)
+    AUTH_TOKEN_ISSUER: str = "https://tokens.local"
+    AUTH_TOKEN_TTL: int = 900  # 15 minutes
+
     # Chat
     CHAT_ENV: str = "dev"
 
@@ -36,7 +48,7 @@ class BackendSettings(BaseSettings):
     FASTMCP_HOST: str = "127.0.0.1"
     FASTMCP_MOUNT_PATH: str = "mcp"
     FASTMCP_PORT: int = 8100
-    FASTMCP_TRANSPORT_TYPE: Literal["http", "sse", "stdio", "streamable-http"] = "http"
+    FASTMCP_TRANSPORT: Literal["http", "sse", "stdio", "streamable-http"] = "http"
 
     # Models
     MODELS_LLM: str = "openai/gpt-4o"

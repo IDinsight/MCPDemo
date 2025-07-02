@@ -47,9 +47,25 @@ cli = typer.Typer()
 
 @cli.command()
 def main(
-    host: str = Settings.FASTMCP_HOST,
-    port: int = Settings.FASTMCP_PORT,
-    reload: bool = True,
+    *,
+    host: str = typer.Option(
+        Settings.FASTMCP_HOST,
+        "--host",
+        help="The host address to bind the server to.",
+        show_default=True,
+    ),
+    port: int = typer.Option(
+        Settings.FASTMCP_PORT,
+        "--port",
+        help="The port number to bind the server to.",
+        show_default=True,
+    ),
+    no_reload: bool = typer.Option(
+        False,
+        "--no-reload",
+        help="Specifies whether the server should automatically reload when changes are detected.",
+        show_default=True,
+    ),
 ) -> None:
     """Start the MCP server application using Uvicorn.
 
@@ -63,7 +79,7 @@ def main(
         The host address to bind the server to.
     port
         The port number to bind the server to.
-    reload
+    no_reload
         Specifies whether the server should automatically reload when changes are
         detected.
     """
@@ -79,7 +95,7 @@ def main(
         port=port,
         log_config=None,  # Disable Uvicorn's default logging config
         log_level=Settings.LOGGING_LOG_LEVEL.lower(),
-        reload=reload,
+        reload=not no_reload,
         reload_dirs=[str(project_dir / "backend" / "src")],
         root_path=os.getenv("API_BACKEND_ROOT", ""),
     )

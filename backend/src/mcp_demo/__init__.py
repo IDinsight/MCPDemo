@@ -26,6 +26,7 @@ from mcp_demo.config import Settings
 from mcp_demo.prometheus_middleware import PrometheusMiddleware
 from mcp_demo.utils.general import make_dir, yaml_serializer
 from mcp_demo.utils.logging_ import initialize_logger
+from mcp_demo.utils.mcp_server import get_bearer_auth_provider
 
 DOMAIN_NAME = os.getenv("DOMAIN_NAME", "")
 FASTMCP_MOUNT_PATH = Settings.FASTMCP_MOUNT_PATH
@@ -133,6 +134,7 @@ def create_mcp_server_app() -> Starlette:
     if not (MCP_APP and MCP_SERVER):
         # 1.
         MCP_SERVER = FastMCP(
+            auth=get_bearer_auth_provider(),  # Use BearerAuthProvider for authentication
             exclude_tags={"deprecated", "internal"},  # Hide these tagged components
             instructions="This is a demo MCP server. Use the tools to interact with it.",
             lifespan=lifespan_mcp,
