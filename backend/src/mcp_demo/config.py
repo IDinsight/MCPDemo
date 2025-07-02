@@ -9,7 +9,7 @@ import os
 from typing import Any, Literal, Optional
 
 # Third Party Library
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,12 +21,16 @@ class BackendSettings(BaseSettings):
     AUTH_FILELOCK_TIMEOUT: int = 2
     AUTH_JWK_ALGORITHM: str = "RS256"
     AUTH_JWKS_FN: str = "jwks.json"
-    AUTH_JWKS_URI: str = "http://localhost:8001/jwks.json"
+    AUTH_JWKS_URI: str = "http://localhost:8000/auth/jwks.json"
     AUTH_ROTATION_KEEP_LAST_N: int = 2
     AUTH_RSA_KEY_SIZE: int = Field(3072, ge=1024)
     AUTH_RSA_PUBLIC_EXPONENT: int = Field(65537, ge=3, le=65537)
     AUTH_TOKEN_ISSUER: str = "https://tokens.local"
     AUTH_TOKEN_TTL: int = 900  # 15 minutes
+    AUTH_USER_NAME: str = Field("admin", description="Username for the MCP Demo user.")
+    AUTH_USER_PASSPHRASE: SecretStr = Field(
+        ..., description="Passphrase for the MCP Demo user."
+    )
 
     # Chat
     CHAT_ENV: str = "dev"

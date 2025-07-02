@@ -10,8 +10,10 @@ from fastmcp.server.dependencies import get_context, get_http_request
 from loguru import logger
 
 # Package Library
-from mcp_demo import MCP_SERVER as mcp
 from mcp_demo.tools.schemas import WeatherData
+from mcp_demo.utils.mcp_server import get_mcp_server
+
+mcp = get_mcp_server(server_name="Server A")
 
 
 class ATool:

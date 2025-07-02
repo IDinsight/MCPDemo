@@ -8,7 +8,9 @@ from fastmcp import Context
 from fastmcp.exceptions import ResourceError
 
 # Package Library
-from mcp_demo import MCP_SERVER as mcp
+from mcp_demo.utils.mcp_server import get_mcp_server
+
+mcp = get_mcp_server(server_name="Server A")
 
 
 @mcp.resource("data://config")

@@ -27,48 +27,49 @@ def atomic_write(
     perm: int = 0o600,
     target_fp: str | os.PathLike,
 ) -> None:
-    """Atomically write `data` to `target`.
-
-    NB: On network filesystems (NFS) atomicity is **NOT** guaranteed. It is only
-    guaranteed on POSIX filesystems and Windows.
+    """Atomically write *data* to **target_fp**, replacing any existing file.
 
     The process is as follows:
 
-    1. Create a temp file in the **same directory** as `target` so the final rename
-        stays on the filesystem.
-    2. Write, flush, and fsync the temp file.
-    3. Set restrictive permissions (default is rw-------). This is done after the
-        file is closed to avoid issues with open file descriptors.
-    4. Rename (os.replace) it over `target`.
-    5. fsync the directory containing `target` to ensure the rename is committed.
-    6. If replace failed, tidy up temp file.
+    1. A temporary file is created **in the same directory** as *target_fp* so the
+       final `os.replace()` call stays on the same filesystem.
+    2. The full payload is written, flushed, and `fsync()`’d to disk.
+    3. Restrictive permissions (default `rw-------`) are applied to the closed temp
+       file.
+    4. `os.replace()` renames the temp file over *target_fp*—atomic on local
+       POSIX filesystems and Windows NTFS.
+    5. The parent directory is `fsync()`’d, guaranteeing the rename is committed.
+    6. If anything after step 2 fails, the original file is left untouched and the
+       temp file is deleted.
 
-    Any exception before Step 3 leaves the original `target` untouched.
+    **Caveats**
+
+    1. Atomicity is **not guaranteed on network filesystems** such as NFS or SMB.
+    2. The function *overwrites* any existing `target_fp`; pass a non-existent path
+        if you need a “create-only” semantic.
+    3. Symlink attacks are mitigated because all work is done in a fresh temp file
+      before the final, atomic rename.
 
     Parameters
     ----------
     data
-        The data to write to the target file. If `mode` is binary (`b`), then this
-        should be bytes-like data. If `mode` is text, then this should be a string.
+        Bytes or text to persist. *mode* must contain `'b'` when passing `bytes`
+        and must omit `'b'` when passing `str`; a `TypeError` is raised otherwise.
     mode
-        The mode in which to open the file. Defaults to `wb` (write binary). If you
-        want to write text, use `w` (write text). If you want to append, use `ab` or
-        `a` (append binary or text, respectively).
+        File-open mode. Defaults to `"wb"` (binary write). Use `"w"` for text or
+        `"a"` / `"ab"` to append.
     perm
-        The permissions to set on the target file after writing. Defaults to `0o600`
-        (read and write for the owner only).
+        Octal permissions applied **after** the temp file is closed; default `0o600`
+        (owner read-write).
     target_fp
-        The target file path where the data should be written. This can be a string or
-        a `Path` object. The target file should not exist before calling this function.
+        Destination path (str or `Path`). Parent directory must be writable.
 
     Raises
     ------
     TypeError
-        If `mode` is binary (`b`) and `data` is not bytes-like, or if `mode` is text
-        and `data` is bytes-like.
+        If *data* type doesn’t match the indicated *mode*.
     OSError
-        If there is an error during file operations, such as writing, flushing, or
-        renaming the file.
+        For any underlying I/O failure during write, flush, or rename.
     """
 
     if (

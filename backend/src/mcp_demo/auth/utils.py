@@ -1,4 +1,46 @@
-"""This module contains authentication utilities."""
+"""This module contains authentication utilities.
+
+This module houses *all* key-management and token-generation logic used by the
+authentication service and, indirectly, every other server that trusts its tokens
+(e.g., the FastMCP server).
+
+High-level flow
+---------------
+1. First start-up
+   - `rotate_keys()` is invoked automatically by `get_jwt_token()` (via
+    `get_latest_private_key_and_kid()`) when `jwks.json` is empty. It generates a fresh
+    RSA-3072 key-pair, stores the private key (PKCS-8 + passphrase) in
+    `$PATHS_SECRETS_DIR`, publishes the public key in `jwks.json`, and primes the
+    in-memory JWKS cache.
+2. Normal token issuance
+   - `routers.issue_token` calls `get_jwt_token()`:
+    2a. `get_latest_private_key_and_kid()` fetches the newest private key.
+    2b. A short-lived RS256 JWT is signed (`kid` header set).
+    2c. The JWT is returned to the caller.
+3. Key rotation (scheduled task or manual call)
+   - `rotate_keys()` generates a *new* key-pair, inserts its JWK at the head of
+   `jwks.json`, prunes keys beyond `AUTH_ROTATION_KEEP_LAST_N`, deletes stale PEM
+   files, and updates the global JWKS cache.
+4. JWKS serving
+   - API route `/auth/jwks.json` simply calls `load_jwks()`. Other servers (e.g.,
+   FastMCP servers) periodically fetch this endpoint to verify future tokens.
+
+Concurrency & Safety
+--------------------
+1. `process_lock()` wraps all file-system writes so multiple Uvicorn workers (or cron
+    jobs) cannot rotate keys concurrently.
+2. Atomic writes via `atomic_write()` guarantee that readers never observe partially
+    written files.
+3. In-memory cache (`_JWKS_CACHE` + `_JWKS_MTIME`) avoids repeated disk I/O and
+    re-parses while still noticing on-disk changes made by other processes.
+
+Environment contracts
+---------------------
+1. `$PATHS_SECRETS_DIR` (directory) must exist and be writable by the process.
+2. `Settings.*` values (issuer, audience, time-outs, etc.) drive defaults.
+
+All public helpers are asyncio-friendly; call them with `await` unless noted otherwise.
+"""
 
 # pylint: disable=W0603
 # Standard Library
@@ -22,6 +64,8 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     load_pem_public_key,
 )
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from filelock import FileLock
 from loguru import logger
 
@@ -224,8 +268,7 @@ async def get_latest_private_key_and_kid(
         A tuple containing the loaded RSA private key and its key ID (kid).
     """
 
-    jwks_fp = _SECRETS_DIR / jwks_fn
-    jwks = await load_jwks(jwks_fp=Path(jwks_fp))
+    jwks = await load_jwks(jwks_fn=jwks_fn)
     if not jwks["keys"]:
         # First run – create a pair automatically.
         kid = await rotate_keys(jwks_fn=jwks_fn, passphrase=passphrase)
@@ -278,13 +321,18 @@ def jwk_from_public_key(
     }
 
 
-async def load_jwks(*, jwks_fp: Path) -> dict[str, Any]:
-    """Load the JWKS (JSON Web Key Set) from the configured path.
+async def load_jwks(*, jwks_fn: str = AUTH_JWKS_FN) -> dict[str, Any]:
+    """Load the JSON Web Key Set (JWKS) from disk.
+
+    NB: This function reads and parses the `jwks.json` file specified by
+    `Settings.AUTH_JWKS_FN`. It caches the parsed keys in memory and tracks the file's
+    last modification time. Subsequent calls only re-read and re-parse the file if its
+    `mtime` has changed, making repeated invocations lightweight and efficient.
 
     Parameters
     ----------
-    jwks_fp
-        The file path to the JWKS file.
+    jwks_fn
+        The filename for the JWKS (JSON Web Key Set) file.
 
     Returns
     -------
@@ -293,6 +341,8 @@ async def load_jwks(*, jwks_fp: Path) -> dict[str, Any]:
     """
 
     global _JWKS_CACHE, _JWKS_MTIME
+
+    jwks_fp = _SECRETS_DIR / jwks_fn
 
     async with process_lock():
         if not jwks_fp.is_file():
@@ -444,8 +494,7 @@ async def rotate_keys(
         )
 
         # 4.
-        jwks_fp = _SECRETS_DIR / jwks_fn
-        jwks = await load_jwks(jwks_fp=jwks_fp)
+        jwks = await load_jwks(jwks_fn=jwks_fn)
         jwks["keys"].insert(0, jwk_from_public_key(kid=kid, public_key=public_key))
 
         # 5.
@@ -463,13 +512,13 @@ async def rotate_keys(
             )
 
         # 6.
-        await asyncio.to_thread(save_jwks, jwks=jwks, jwks_fp=jwks_fp)
+        await asyncio.to_thread(save_jwks, jwks=jwks, jwks_fn=jwks_fn)
 
         # 7.
         global _JWKS_CACHE, _JWKS_MTIME
 
         _JWKS_CACHE = jwks
-        _JWKS_MTIME = jwks_fp.stat().st_mtime
+        _JWKS_MTIME = (_SECRETS_DIR / jwks_fn).stat().st_mtime
 
         if kid in {key["kid"] for key in jwks["keys"][1:]}:
             logger.warning(f"Duplicate kid detected after rotation: {kid}")
@@ -477,22 +526,22 @@ async def rotate_keys(
         return kid
 
 
-def save_jwks(*, jwks: dict[str, Any], jwks_fp: Path) -> None:
+def save_jwks(*, jwks: dict[str, Any], jwks_fn: str = AUTH_JWKS_FN) -> None:
     """Save the JWKS (JSON Web Key Set) to a file.
 
     Parameters
     ----------
     jwks
         The JWKS to be saved, typically containing one or more JWKs (JSON Web Keys).
-    jwks_fp
-        The file path where the JWKS will be saved.
+    jwks_fn
+        The filename for the JWKS (JSON Web Key Set) file.
     """
 
     atomic_write(
         data=json.dumps(jwks, ensure_ascii=False, separators=(",", ":")).encode(),
         mode="wb",
         perm=0o640,
-        target_fp=jwks_fp,
+        target_fp=_SECRETS_DIR / jwks_fn,
     )
 
 
@@ -540,3 +589,42 @@ def save_keypair(
     atomic_write(data=public_pem, target_fp=public_key_fp, mode="wb", perm=0o640)
 
     return private_key_fp, public_key_fp
+
+
+async def verify_user(*, form: OAuth2PasswordRequestForm = Depends()) -> dict[str, Any]:
+    """Verify user credentials.
+
+    TODO: Swap in a real DB lookup + salted hash check. At the moment, this only keeps
+    track of a single user with a hardcoded username and passphrase from the .env file.
+
+    Parameters
+    ----------
+    form
+        The OAuth2 password request form containing the username, password, and scopes.
+
+    Returns
+    -------
+    dict[str, Any]
+        A dictionary containing the subject (username) and scopes of the authenticated
+        user.
+
+    Raises
+    ------
+    HTTPException
+        If the username or password is incorrect, an HTTP 401 Unauthorized error is
+        raised.
+    """
+
+    if not (
+        form.username == Settings.AUTH_USER_NAME
+        and form.password == Settings.AUTH_USER_PASSPHRASE.get_secret_value()
+    ):
+        raise HTTPException(
+            detail="Bad credentials.",
+            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    scopes = form.scopes or ["read"]  # Default for FastMCP
+
+    return {"sub": form.username, "scopes": scopes}
