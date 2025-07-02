@@ -14,6 +14,7 @@ python src/mcp_demo/entries/client_call.py
 # Standard Library
 import asyncio
 import json
+import os
 import sys
 
 from pathlib import Path
@@ -23,6 +24,7 @@ import typer
 
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
+from fastmcp.client.client import CallToolResult
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.mcp_config import MCPConfig, RemoteMCPServer
 from loguru import logger
@@ -81,7 +83,9 @@ async def _run_client(
         transport=MCPConfig(  # type: ignore
             mcpServers={
                 "remote_server": RemoteMCPServer(
-                    auth=BearerAuth(token=""),
+                    auth=BearerAuth(
+                        token=os.getenv("AUTH_ACCESS_TOKEN", "dummy-access")
+                    ),
                     transport=transport,
                     url=f"http://{host}:{port}/{server_mount_path}",
                 )
@@ -112,10 +116,10 @@ async def _run_client(
         bmi_result = await client.call_tool(
             "calculate_bmi", {"height": 1.78, "weight": 72}, timeout=60
         )
-        assert isinstance(bmi_result[0], TextContent)
-        bmi_text = bmi_result[0].text
-        logger.debug(f"{bmi_result = }")
-        logger.info(f"BMI: {bmi_text}\n")
+        assert isinstance(bmi_result, CallToolResult), f"{type(bmi_result) = }"
+        assert bmi_result.is_error is False
+        logger.info(f"{bmi_result.data = }")
+        logger.info(f"{bmi_result.structured_content = }\n")
 
         try:
             await client.call_tool("deprecated_tool", {"a": 5, "b": 10})
@@ -128,10 +132,10 @@ async def _run_client(
         get_weather_result = await client.call_tool(
             "get_weather", {"city": "Northville"}
         )
-        logger.info(f"{get_weather_result = }\n")
+        logger.info(f"{get_weather_result.data = }\n")
 
         user_agent_info_result = await client.call_tool("user_agent_info", {})
-        logger.info(f"{user_agent_info_result = }\n")
+        logger.info(f"{user_agent_info_result.data = }\n")
 
         # Read resources.
         data_resource = await client.read_resource("data://3")

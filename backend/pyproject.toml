@@ -97,7 +97,7 @@ dependencies = [
     "asyncpg>=0.30.0",
     "colored>=2.3.0",
     "fastapi>=0.115.14",
-    "fastmcp==2.9.2",
+    "fastmcp>=2.10.1",
     "greenlet>=3.2.3",
     "griffe>=1.7.2",
     "gunicorn==23.0.0",

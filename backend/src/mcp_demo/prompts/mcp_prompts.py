@@ -13,7 +13,7 @@ from mcp.types import PromptMessage
 # Package Library
 from mcp_demo.utils.mcp_server import get_mcp_server
 
-mcp = get_mcp_server(server_name="Server A")
+mcp = get_mcp_server(server_name="Main Server")
 
 
 @mcp.prompt

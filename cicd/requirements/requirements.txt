@@ -453,9 +453,9 @@ fastapi-sso==0.16.0 \
     --hash=sha256:3a66a942474ef9756d3a9d8b945d55bd9faf99781facdb9b87a40b73d6d6b0c3 \
     --hash=sha256:f3941f986347566b7d3747c710cf474a907f581bfb6697ff3bb3e44eb76b438c
     # via litellm
-fastmcp==2.9.2 \
-    --hash=sha256:3626a3d9b1fa6325756273b6d1fe1ec610baafec957ac22f7aa1dc17c1db8b93 \
-    --hash=sha256:c000eb0a2d50afcc7d26be4c867abf5c995ca0e0119f17417d50f61e2e17347c
+fastmcp==2.10.1 \
+    --hash=sha256:17d0acea04eeb3464c9eca42b6774fb06b38b72cface9af6a7482b3aa561db13 \
+    --hash=sha256:450c72e523926a2203c7eecdb4a8b0507506667bc8736b8b7bb44f6312424649
     # via mcp-demo (pyproject.toml)
 filelock==3.18.0 \
     --hash=sha256:adbc88eabb99d2fec8c9c1b229b171f18afa655400173ddc653d5d01501fb9f2 \
@@ -788,7 +788,9 @@ jmespath==1.0.1 \
 jsonschema==4.24.0 \
     --hash=sha256:0b4e8069eb12aedfa881333004bccaec24ecef5a8a6a4b6df142b2cc9599d196 \
     --hash=sha256:a462455f19f5faf404a7902952b6f0e3ce868f3ee09a359b05eca6673bd8412d
-    # via litellm
+    # via
+    #   litellm
+    #   mcp
 jsonschema-specifications==2025.4.1 \
     --hash=sha256:4653bffbd6584f7de83a67e0d620ef16900b390ddc7939d56684d6c81e33f1af \
     --hash=sha256:630159c9f4dbea161a6a2205c3011cc4f18ff381b189fff48bb39b9bf26ae608
@@ -878,9 +880,9 @@ markupsafe==3.0.2 \
     # via
     #   jinja2
     #   mako
-mcp==1.9.4 \
-    --hash=sha256:7fcf36b62936adb8e63f89346bccca1268eeca9bf6dfb562ee10b1dfbda9dac0 \
-    --hash=sha256:cfb0bcd1a9535b42edaef89947b9e18a8feb49362e1cc059d6e7fc636f2cb09f
+mcp==1.10.1 \
+    --hash=sha256:4d08301aefe906dce0fa482289db55ce1db831e3e67212e65b5e23ad8454b3c5 \
+    --hash=sha256:aaa0957d8307feeff180da2d9d359f2b801f35c0c67f1882136239055ef034c2
     # via fastmcp
 mdurl==0.1.2 \
     --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8 \
@@ -1290,6 +1292,7 @@ pydantic==2.11.7 \
     #   mcp-demo (pyproject.toml)
     #   fastapi
     #   fastapi-sso
+    #   fastmcp
     #   litellm
     #   mcp
     #   openai

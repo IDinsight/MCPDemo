@@ -1,13 +1,13 @@
-"""This module contains the main entry point for the MCP server A application.
+"""This module contains the main entry point for the support MCP server application.
 
 From the backend directory of this project, this entry point can be invoked from the
 command line via:
 
-python -m src.mcp_demo.entries.mcp_server_a
+python -m src.mcp_demo.entries.mcp_server_support
 
 or
 
-python src/mcp_demo/entries/mcp_server_a.py
+python src/mcp_demo/entries/mcp_server_support.py
 """
 
 # Standard Library
@@ -59,12 +59,12 @@ class MCPServerContext:
     redis_client: aioredis.Redis
     runtime_context: str
 
-    some_text: str = "This is a demo MCP server A context."
+    some_text: str = "This is the context for the support MCP server."
 
 
 @asynccontextmanager
 async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
-    """Lifespan events for the MCP server A application.
+    """Lifespan events for the support MCP server application.
 
     The process is as follows:
 
@@ -82,10 +82,10 @@ async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
     Yields
     ------
     AsyncIterator[MCPServerContext]
-        A context manager that provides control to the MCP server A application.
+        A context manager that provides control to the support MCP server application.
     """
 
-    logger.info("Starting MCP server A application...")
+    logger.info("Starting support MCP server application...")
 
     redis_client: aioredis.Redis | None = None
 
@@ -127,25 +127,20 @@ async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
             logger.success("Redis connection closed!")
 
         # 5.
-        logger.success("MCP server A application finished!")
+        logger.success("Support MCP server application finished!")
 
 
 # Create the MCP server application instance.
 app, _ = create_mcp_server_app(
     exclude_tags={"deprecated", "internal"},  # Hide these tagged components
-    instructions="This is MCP server A.",
+    instructions="This is the support MCP server.",
     lifespan=lifespan_mcp,
     mask_error_details=True,  # Mask error details in responses and defer to ToolError for security reasons
     mcp_app_mount_path=FASTMCP_MOUNT_PATH,
     on_duplicate_prompts="error",
     on_duplicate_resources="error",
     on_duplicate_tools="error",
-    register_modules={
-        "mcp_demo.prompts.mcp_prompts",
-        "mcp_demo.resources.basic_resources",
-        "mcp_demo.tools.basic_tools",
-    },
-    server_name="Server A",
+    server_name="Support Server",
     tool_serializer=yaml_serializer,
 )
 
@@ -172,7 +167,7 @@ def main(
         show_default=True,
     ),
 ) -> None:
-    """Start the MCP server application using Uvicorn.
+    """Start the support MCP server application using Uvicorn.
 
     The process is as follows:
 
@@ -189,15 +184,15 @@ def main(
         detected.
     """
 
-    logger.info("Starting MCP server A with Uvicorn 🦄...")
+    logger.info("Starting support MCP server with Uvicorn 🦄...")
 
     # 1.
     project_dir = Path(os.getenv("PATHS_PROJECT_DIR", ""))
     assert project_dir.is_dir(), f"'{project_dir}' is not a directory."
     uvicorn.run(
-        "mcp_demo.entries.mcp_server_a:app",
+        "mcp_demo.entries.mcp_server_b:app",
         host=host,
-        port=port,
+        port=port + 1,
         log_config=None,  # Disable Uvicorn's default logging config
         log_level=Settings.LOGGING_LOG_LEVEL.lower(),
         reload=not no_reload,
