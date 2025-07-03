@@ -152,11 +152,10 @@ def create_mcp_server_app(
 
     1. If the MCP server application instance already exists, return it.
     2. Create an MCP server instance.
-    3. If middleware is provided, add it to the MCP server instance.
-    4. Create a Starlette application that mounts the MCP server instance at the
+    3. Create a Starlette application that mounts the MCP server instance at the
         specified path.
-    5. Store the MCP server application instance in a global variable for later use.
-    6. Register server components such as tools, resources, prompts, etc. with the MCP
+    4. Store the MCP server application instance in a global variable for later use.
+    5. Register server components such as tools, resources, prompts, etc. with the MCP
         server.
 
     Parameters
@@ -197,20 +196,20 @@ def create_mcp_server_app(
 
     # 2.
     mcp = FastMCP(
-        auth=auth, json_response=True, lifespan=lifespan, name=server_name, **kwargs
+        auth=auth,
+        lifespan=lifespan,
+        middleware=convert_to_list(middleware or []),
+        name=server_name,
+        **kwargs,
     )
 
     # 3.
-    for mw in convert_to_list(middleware or []):
-        mcp.add_middleware(mw)
-
-    # 4.
     app = mcp.http_app(path=f"/{mcp_app_mount_path}")
 
-    # 5.
+    # 4.
     __MCP[server_name] = (app, mcp)
 
-    # 6.
+    # 5.
     register_server_components(
         register_modules=register_modules, server_name=server_name
     )

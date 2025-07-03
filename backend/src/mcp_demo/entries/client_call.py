@@ -97,7 +97,7 @@ async def _run_client(
         await list_resource_templates(client=client)
         await list_prompts(client=client)
 
-        # # Call main server tools.
+        # Call main server tools.
         bmi_result = await client.call_tool(
             "main_server_calculate_bmi", {"height": 1.78, "weight": 72}, timeout=60
         )

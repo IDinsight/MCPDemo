@@ -6,7 +6,6 @@ from typing import Any, Callable
 # Third Party Library
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
-from loguru import logger
 
 
 class TagBasedMiddleware(Middleware):
@@ -47,8 +46,6 @@ class TagBasedMiddleware(Middleware):
 
                 # Check if this tool has a "foobar" tag.
                 if "foobar" in tool.tags:
-                    logger.error(f"{tool = }")
-                    logger.error(f"{tool.tags = }")
                     raise ToolError("Access denied by middleware: foobar tool")
             finally:
                 pass

@@ -24,10 +24,7 @@ import typer
 import uvicorn
 
 from fastmcp import FastMCP
-from fastmcp.server.middleware.logging import (
-    LoggingMiddleware,
-    StructuredLoggingMiddleware,
-)
+from fastmcp.server.middleware.logging import LoggingMiddleware
 from fastmcp.server.middleware.timing import DetailedTimingMiddleware, TimingMiddleware
 from loguru import logger
 from redis import asyncio as aioredis
@@ -201,13 +198,12 @@ app_main, mcp_main = create_mcp_server_app(
     exclude_tags={"deprecated", "internal"},  # Hide these tagged components
     instructions="This is the main MCP server.",
     lifespan=lifespan_main_server,
-    mask_error_details=True,  # Mask error details in responses and defer to ToolError for security reasons
+    mask_error_details=False,
     mcp_app_mount_path=FASTMCP_MOUNT_PATH,
     middleware=[
         DetailedTimingMiddleware(),
         TimingMiddleware(),
         LoggingMiddleware(include_payloads=True, max_payload_length=1000),
-        StructuredLoggingMiddleware(include_payloads=True),
         TagBasedMiddleware(),
     ],
     on_duplicate_prompts="error",
