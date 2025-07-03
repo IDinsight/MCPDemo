@@ -162,6 +162,28 @@ def divide_with_error_handling(*, a: int, b: int) -> float:
     return a / b
 
 
+@mcp_main.tool(tags={"foobar"})
+async def foobar_tool(*, a: int, b: int) -> int:
+    """An internal tool that should not be listed due to its tag via the use of
+    middleware.
+
+    Parameters
+    ----------
+    a
+        The first number to add.
+    b
+        The second number to add.
+
+    Returns
+    -------
+    int
+        The sum of the two numbers.
+    """
+
+    logger.debug("This is the foobar tool and should not be listed due to middleware.")
+    return a + b
+
+
 @mcp_main.tool(tags={"internal"})
 async def internal_tool(*, a: int, b: int) -> int:
     """An internal tool that should not be listed.

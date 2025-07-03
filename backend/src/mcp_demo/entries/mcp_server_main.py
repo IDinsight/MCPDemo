@@ -24,6 +24,11 @@ import typer
 import uvicorn
 
 from fastmcp import FastMCP
+from fastmcp.server.middleware.logging import (
+    LoggingMiddleware,
+    StructuredLoggingMiddleware,
+)
+from fastmcp.server.middleware.timing import DetailedTimingMiddleware, TimingMiddleware
 from loguru import logger
 from redis import asyncio as aioredis
 
@@ -37,6 +42,7 @@ if __name__ == "__main__":
 
 # Package Library
 from mcp_demo.config import Settings
+from mcp_demo.middlewares.mcp_server import TagBasedMiddleware
 from mcp_demo.utils.mcp_server import create_mcp_server_app, get_bearer_auth_provider
 
 assert (
@@ -197,6 +203,13 @@ app_main, mcp_main = create_mcp_server_app(
     lifespan=lifespan_main_server,
     mask_error_details=True,  # Mask error details in responses and defer to ToolError for security reasons
     mcp_app_mount_path=FASTMCP_MOUNT_PATH,
+    middleware=[
+        DetailedTimingMiddleware(),
+        TimingMiddleware(),
+        LoggingMiddleware(include_payloads=True, max_payload_length=1000),
+        StructuredLoggingMiddleware(include_payloads=True),
+        TagBasedMiddleware(),
+    ],
     on_duplicate_prompts="error",
     on_duplicate_resources="error",
     on_duplicate_tools="error",

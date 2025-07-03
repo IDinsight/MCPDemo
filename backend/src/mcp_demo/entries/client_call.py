@@ -121,6 +121,11 @@ async def _run_client(
         )
         logger.info(f"{user_agent_info_result.data = }\n")
 
+        try:
+            await client.call_tool("main_server_foobar_tool", {"a": 5, "b": 10})
+        except ToolError as e:
+            logger.info(f"Calling foobar tool: {e}\n")
+
         # Read main server resources.
         data_resource = await client.read_resource("data://main_server/3")
         logger.debug(f"{data_resource = }")

@@ -15,6 +15,7 @@ from starlette.applications import Starlette
 
 # Package Library
 from mcp_demo.config import Settings
+from mcp_demo.utils.general import convert_to_list
 
 __MCP: dict[str, tuple[Starlette, FastMCP]] = {}
 
@@ -140,6 +141,7 @@ def create_mcp_server_app(
     auth: BearerAuthProvider | None = None,
     lifespan: Callable | None = None,
     mcp_app_mount_path: str = Settings.FASTMCP_MOUNT_PATH,
+    middleware: Callable | list[Callable] | None = None,
     register_modules: set[str] | None = None,
     server_name: str,
     **kwargs: Any,
@@ -150,10 +152,11 @@ def create_mcp_server_app(
 
     1. If the MCP server application instance already exists, return it.
     2. Create an MCP server instance.
-    3. Create a Starlette application that mounts the MCP server instance at the
+    3. If middleware is provided, add it to the MCP server instance.
+    4. Create a Starlette application that mounts the MCP server instance at the
         specified path.
-    4. Store the MCP server application instance in a global variable for later use.
-    5. Register server components such as tools, resources, prompts, etc. with the MCP
+    5. Store the MCP server application instance in a global variable for later use.
+    6. Register server components such as tools, resources, prompts, etc. with the MCP
         server.
 
     Parameters
@@ -166,6 +169,11 @@ def create_mcp_server_app(
         provided, the MCP server will use its default lifespan management.
     mcp_app_mount_path
         The path at which the MCP server application will be mounted.
+    middleware
+        An optional middleware or list of middlewares to apply to the MCP server
+        application. This can be used to add custom processing for requests and
+        responses. The order provided in the list will be preserved. Middleware should
+        be passed like `my_middleware(...)`, NOT `my_middleware` (without parentheses).
     register_modules
         A set of module paths to register with the MCP server. This allows for dynamic
         registration of tools, resources, and prompts defined in those modules.
@@ -193,12 +201,16 @@ def create_mcp_server_app(
     )
 
     # 3.
-    app = mcp.http_app(path=f"/{mcp_app_mount_path}")
+    for mw in convert_to_list(middleware or []):
+        mcp.add_middleware(mw)
 
     # 4.
-    __MCP[server_name] = (app, mcp)
+    app = mcp.http_app(path=f"/{mcp_app_mount_path}")
 
     # 5.
+    __MCP[server_name] = (app, mcp)
+
+    # 6.
     register_server_components(
         register_modules=register_modules, server_name=server_name
     )
