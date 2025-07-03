@@ -10,10 +10,10 @@ from fastmcp.exceptions import ResourceError
 # Package Library
 from mcp_demo.utils.mcp_server import get_mcp_server
 
-mcp = get_mcp_server(server_name="Main Server")
+mcp_main = get_mcp_server(server_name="Main Server")
 
 
-@mcp.resource("data://config")
+@mcp_main.resource("data://config")
 def get_config() -> dict[str, Any]:
     """Resource that returns a JSON data (dict is auto-serialized).
 
@@ -30,7 +30,7 @@ def get_config() -> dict[str, Any]:
     }
 
 
-@mcp.resource("data://{id_}")
+@mcp_main.resource("data://{id_}")
 def get_data_by_id(*, id_: str) -> dict[str, str]:
     """Error handling example.
 
@@ -58,7 +58,7 @@ def get_data_by_id(*, id_: str) -> dict[str, str]:
     return {"id": id_, "value": "data"}
 
 
-@mcp.resource("resource://{name}/details")
+@mcp_main.resource("resource://{name}/details")
 async def get_details(*, ctx: Context, name: str) -> dict:
     """Get details for a specific name.
 
@@ -73,7 +73,7 @@ async def get_details(*, ctx: Context, name: str) -> dict:
     return {"name": name, "accessed_at": ctx.request_id}
 
 
-@mcp.resource("resource://greeting")
+@mcp_main.resource("resource://greeting")
 def get_greeting() -> str:
     """Basic dynamic resource that returns a string.
 
@@ -86,7 +86,7 @@ def get_greeting() -> str:
     return "Hello from FastMCP Resources!"
 
 
-@mcp.resource("repos://{owner}/{repo}/info")
+@mcp_main.resource("repos://{owner}/{repo}/info")
 def get_repo_info(*, owner: str, repo: str) -> dict[str, Any]:
     """Resource template with multiple parameters.
 
@@ -113,7 +113,7 @@ def get_repo_info(*, owner: str, repo: str) -> dict[str, Any]:
     }
 
 
-@mcp.resource("resource://system-status")
+@mcp_main.resource("resource://system-status")
 async def get_system_status(ctx: Context) -> dict:
     """Provides system status information.
 
@@ -131,7 +131,7 @@ async def get_system_status(ctx: Context) -> dict:
     return {"status": "operational", "request_id": ctx.request_id}
 
 
-@mcp.resource("repo://{owner}/{path*}/template.py")
+@mcp_main.resource("repo://{owner}/{path*}/template.py")
 def get_template_file(*, owner: str, path: str) -> dict[str, str]:
     """Retrieves a file from a specific repository and path, but
     only if the resource ends with `template.py`.
@@ -184,11 +184,11 @@ def lookup_user(
     return {"error": "No lookup parameters provided"}
 
 
-mcp.resource("users://email/{email}")(lookup_user)
-mcp.resource("users://name/{name}")(lookup_user)
+mcp_main.resource("users://email/{email}")(lookup_user)
+mcp_main.resource("users://name/{name}")(lookup_user)
 
 
-@mcp.resource("search://{query}")
+@mcp_main.resource("search://{query}")
 def search_resources(
     *, include_archived: bool = False, max_results: int = 10, query: str
 ) -> dict[str, Any]:

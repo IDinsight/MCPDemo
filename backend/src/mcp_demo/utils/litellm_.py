@@ -25,7 +25,7 @@ from tenacity import (
 
 # Package Library
 from mcp_demo.config import Settings
-from mcp_demo.prompts.base import error_correction
+from mcp_demo.prompts.chat import error_correction
 from mcp_demo.schemas import Limits, ValidatorCall
 from mcp_demo.utils.general import convert_to_list, remove_json_markdown
 

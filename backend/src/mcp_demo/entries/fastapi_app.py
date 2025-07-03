@@ -31,8 +31,8 @@ if __name__ == "__main__":
         sys.path.append(str(PACKAGE_PATH))
 
 # Package Library
-from mcp_demo import create_fastapi_app
 from mcp_demo.config import Settings
+from mcp_demo.utils.fastapi_ import create_fastapi_app
 
 assert (
     sys.version_info.major >= 3 and sys.version_info.minor >= 11
@@ -47,13 +47,13 @@ app = create_fastapi_app()
 @cli.command()
 def main(
     host: str = typer.Option(
-        "0.0.0.0",
+        Settings.FASTAPI_HOST,
         "--host",
         help="The host address to bind the server to.",
         show_default=True,
     ),
     port: int = typer.Option(
-        8000,
+        Settings.FASTAPI_PORT,
         "--port",
         help="The port number to bind the server to.",
         show_default=True,

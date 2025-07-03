@@ -1,13 +1,13 @@
-"""This module contains the main entry point for the support MCP server application.
+"""This module contains the main entry point for an external MCP server application.
 
 From the backend directory of this project, this entry point can be invoked from the
 command line via:
 
-python -m src.mcp_demo.entries.mcp_server_support
+python -m src.mcp_demo.entries.mcp_server_external
 
 or
 
-python src/mcp_demo/entries/mcp_server_support.py
+python src/mcp_demo/entries/mcp_server_external.py
 """
 
 # Standard Library
@@ -15,9 +15,8 @@ import os
 import sys
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 # Third Party Library
 import typer
@@ -25,7 +24,6 @@ import uvicorn
 
 from fastmcp import FastMCP
 from loguru import logger
-from redis import asyncio as aioredis
 
 # Append the framework path. NB: This is required if this entry point is invoked from
 # the command line. However, it is not necessary if it is imported from a pip install.
@@ -44,103 +42,80 @@ assert (
     sys.version_info.major >= 3 and sys.version_info.minor >= 11
 ), "MCP Demo requires at least Python 3.11!"
 
-
-FASTMCP_MOUNT_PATH = Settings.FASTMCP_MOUNT_PATH
-REDIS_URL = Settings.REDIS_URL
+EXTERNAL_FASTMCP_MOUNT_PATH = Settings.EXTERNAL_FASTMCP_MOUNT_PATH
 
 # Instantiate typer apps for the command line interface.
 cli = typer.Typer()
 
 
-@dataclass
-class MCPServerContext:
-    """Context for the MCP server application."""
-
-    redis_client: aioredis.Redis
-    runtime_context: str
-
-    some_text: str = "This is the context for the support MCP server."
-
-
 @asynccontextmanager
-async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
-    """Lifespan events for the support MCP server application.
+async def lifespan_external_server(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
+    """Lifespan events for the external MCP server application.
 
     The process is as follows:
 
-    1. List the MCP server tools (for demonstration purposes).
-    2. Initialize Redis client for the MCP server.
-    3. Yield control to the MCP server application.
-    4. Close the Redis connection when the MCP server application finishes.
-    5. Close the MCP server when the application finishes.
+    1. List the external MCP server tools (for demonstration purposes).
+    2. Yield control to the external MCP server application.
+    3. Perform any necessary cleanup when the external MCP server application finishes.
 
     Parameters
     ----------
     server
-        The MCP server instance.
+        The external MCP server instance.
 
     Yields
     ------
-    AsyncIterator[MCPServerContext]
-        A context manager that provides control to the support MCP server application.
+    AsyncIterator[dict[str, Any]]
+        A context manager that provides control to the external MCP server application.
     """
 
-    logger.info("Starting support MCP server application...")
-
-    redis_client: aioredis.Redis | None = None
+    logger.info("Starting external MCP server application...")
 
     try:
         # 1.
         server_tools = await server.get_tools()
         server_tool_names = list(server_tools.keys())
-        logger.info(f"Available tools server-side: {server_tool_names}")
+        logger.info(f"Available tools external server-side: {server_tool_names}")
 
         server_resources = await server.get_resources()
         server_resource_names = list(server_resources.keys())
-        logger.info(f"Available resources server-side: {server_resource_names}")
-
-        server_resource_tempaltes = await server.get_resource_templates()
-        server_resource_template_names = list(server_resource_tempaltes.keys())
         logger.info(
-            f"Available resource templates server-side: {server_resource_template_names}"
+            f"Available resources external server-side: {server_resource_names}"
+        )
+
+        server_resource_templates = await server.get_resource_templates()
+        server_resource_template_names = list(server_resource_templates.keys())
+        logger.info(
+            f"Available resource templates external server-side: "
+            f"{server_resource_template_names}"
         )
 
         server_prompts = await server.get_prompts()
         server_prompt_names = list(server_prompts.keys())
-        logger.info(f"Available prompts server-side: {server_prompt_names}")
+        logger.info(f"Available prompts external server-side: {server_prompt_names}")
 
         # 2.
-        logger.info("Initializing Redis client...")
-        redis_client = await aioredis.from_url(f"{REDIS_URL}", decode_responses=True)
-        assert isinstance(redis_client, aioredis.Redis)
-        logger.success("Redis connection established!")
-
-        # 3.
         logger.log("CELEBRATE", "Ready to roll! 🚀")
 
-        yield MCPServerContext(redis_client=redis_client, runtime_context="new context")
+        yield {"a": "Context A", "b": "Context B"}
     finally:
-        if isinstance(redis_client, aioredis.Redis):
-            # 4.
-            logger.info("Closing Redis connection...")
-            await redis_client.aclose()
-            logger.success("Redis connection closed!")
-
-        # 5.
+        # 3.
         logger.success("Support MCP server application finished!")
 
 
 # Create the MCP server application instance.
-app, _ = create_mcp_server_app(
+app_external, _ = create_mcp_server_app(
+    auth=None,  # No authentication for the external server
     exclude_tags={"deprecated", "internal"},  # Hide these tagged components
-    instructions="This is the support MCP server.",
-    lifespan=lifespan_mcp,
+    instructions="This is the external MCP server.",
+    lifespan=lifespan_external_server,
     mask_error_details=True,  # Mask error details in responses and defer to ToolError for security reasons
-    mcp_app_mount_path=FASTMCP_MOUNT_PATH,
+    mcp_app_mount_path=EXTERNAL_FASTMCP_MOUNT_PATH,
     on_duplicate_prompts="error",
     on_duplicate_resources="error",
     on_duplicate_tools="error",
-    server_name="Support Server",
+    register_modules={"mcp_demo.tools.external_tools"},
+    server_name="External Server",
     tool_serializer=yaml_serializer,
 )
 
@@ -149,13 +124,13 @@ app, _ = create_mcp_server_app(
 def main(
     *,
     host: str = typer.Option(
-        Settings.FASTMCP_HOST,
+        Settings.EXTERNAL_FASTMCP_HOST,
         "--host",
         help="The host address to bind the server to.",
         show_default=True,
     ),
     port: int = typer.Option(
-        Settings.FASTMCP_PORT,
+        Settings.EXTERNAL_FASTMCP_PORT,
         "--port",
         help="The port number to bind the server to.",
         show_default=True,
@@ -167,7 +142,7 @@ def main(
         show_default=True,
     ),
 ) -> None:
-    """Start the support MCP server application using Uvicorn.
+    """Start the external MCP server application using Uvicorn.
 
     The process is as follows:
 
@@ -184,15 +159,15 @@ def main(
         detected.
     """
 
-    logger.info("Starting support MCP server with Uvicorn 🦄...")
+    logger.info("Starting external MCP server with Uvicorn 🦄...")
 
     # 1.
     project_dir = Path(os.getenv("PATHS_PROJECT_DIR", ""))
     assert project_dir.is_dir(), f"'{project_dir}' is not a directory."
     uvicorn.run(
-        "mcp_demo.entries.mcp_server_b:app",
+        "mcp_demo.entries.mcp_server_external:app_external",
         host=host,
-        port=port + 1,
+        port=port,
         log_config=None,  # Disable Uvicorn's default logging config
         log_level=Settings.LOGGING_LOG_LEVEL.lower(),
         reload=not no_reload,

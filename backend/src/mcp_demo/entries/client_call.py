@@ -14,7 +14,6 @@ python src/mcp_demo/entries/client_call.py
 # Standard Library
 import asyncio
 import json
-import os
 import sys
 
 from pathlib import Path
@@ -23,10 +22,8 @@ from pathlib import Path
 import typer
 
 from fastmcp import Client
-from fastmcp.client.auth import BearerAuth
 from fastmcp.client.client import CallToolResult
 from fastmcp.exceptions import ToolError
-from fastmcp.utilities.mcp_config import MCPConfig, RemoteMCPServer
 from loguru import logger
 from mcp.types import PromptMessage, TextContent, TextResourceContents
 
@@ -41,6 +38,7 @@ if __name__ == "__main__":
 # Package Library
 from mcp_demo.config import Settings
 from mcp_demo.utils.mcp_client import (
+    get_mcp_config,
     list_prompts,
     list_resource_templates,
     list_resources,
@@ -54,7 +52,6 @@ assert (
 # Instantiate typer apps for the command line interface.
 cli = typer.Typer()
 
-FASTMCP_DEBUG = Settings.FASTMCP_DEBUG
 FASTMCP_HOST = Settings.FASTMCP_HOST
 FASTMCP_MOUNT_PATH = Settings.FASTMCP_MOUNT_PATH
 FASTMCP_PORT = Settings.FASTMCP_PORT
@@ -78,29 +75,17 @@ async def _run_client(
         The transport type for the MCP client.
     """
 
-    # Use `MCPConfig` for multi-server client configurations.
     client: Client = Client(
-        transport=MCPConfig(  # type: ignore
-            mcpServers={
-                "remote_server": RemoteMCPServer(
-                    auth=BearerAuth(
-                        token=os.getenv("AUTH_ACCESS_TOKEN", "dummy-access")
-                    ),
-                    transport=transport,
-                    url=f"http://{host}:{port}/{server_mount_path}",
-                )
-            }
-        ),
+        transport=get_mcp_config(  # type: ignore
+            host=host,
+            port=port,
+            server_mount_path=server_mount_path,
+            transport=transport,
+        )
     )
 
-    # Also valid.
-    # client: Client = Client(f"http://{host}:{port}/{server_mount_path}")
-
     async with client:
-        logger.success(
-            f"Connected to MCP server at {host}:{port}/{server_mount_path} using "
-            f"{transport} transport. Connection status: {client.is_connected()}"
-        )
+        logger.success(f"MCP client connection status: {client.is_connected()}")
 
         # Basic server interaction.
         await client.ping()
@@ -112,9 +97,9 @@ async def _run_client(
         await list_resource_templates(client=client)
         await list_prompts(client=client)
 
-        # Call tools.
+        # # Call main server tools.
         bmi_result = await client.call_tool(
-            "calculate_bmi", {"height": 1.78, "weight": 72}, timeout=60
+            "main_server_calculate_bmi", {"height": 1.78, "weight": 72}, timeout=60
         )
         assert isinstance(bmi_result, CallToolResult), f"{type(bmi_result) = }"
         assert bmi_result.is_error is False
@@ -122,49 +107,48 @@ async def _run_client(
         logger.info(f"{bmi_result.structured_content = }\n")
 
         try:
-            await client.call_tool("deprecated_tool", {"a": 5, "b": 10})
+            await client.call_tool("main_server_deprecated_tool", {"a": 5, "b": 10})
         except ToolError as e:
             logger.warning(f"Calling deprecated tool result: {e}\n")
 
-        my_tool_add_result = await client.call_tool("my_tool_add", {"a": 5, "b": 10})
+        my_tool_add_result = await client.call_tool(
+            "main_server_my_tool_add", {"a": 5, "b": 10}
+        )
         logger.info(f"{my_tool_add_result = }\n")
 
-        get_weather_result = await client.call_tool(
-            "get_weather", {"city": "Northville"}
+        user_agent_info_result = await client.call_tool(
+            "main_server_user_agent_info", {}
         )
-        logger.info(f"{get_weather_result.data = }\n")
-
-        user_agent_info_result = await client.call_tool("user_agent_info", {})
         logger.info(f"{user_agent_info_result.data = }\n")
 
-        # Read resources.
-        data_resource = await client.read_resource("data://3")
+        # Read main server resources.
+        data_resource = await client.read_resource("data://main_server/3")
         logger.debug(f"{data_resource = }")
         assert isinstance(data_resource[0], TextResourceContents)
         data_resource_text = json.loads(data_resource[0].text)
         logger.info(f"{data_resource_text = }\n")
 
-        search_resource = await client.read_resource("search://foobar")
+        search_resource = await client.read_resource("search://main_server/foobar")
         assert isinstance(search_resource[0], TextResourceContents)
         search_resource_text = json.loads(search_resource[0].text)
         logger.info(f"{search_resource_text = }\n")
 
-        # Read resource templates.
+        # Read main server resource templates.
         lookup_user_email = await client.read_resource(
-            "users://email/example@gmail.com"
+            "users://main_server/email/example@gmail.com"
         )
         assert isinstance(lookup_user_email[0], TextResourceContents)
         lookup_user_email_text = lookup_user_email[0].text
         logger.info(f"{lookup_user_email_text = }\n")
 
-        lookup_user_name = await client.read_resource("users://name/foo")
+        lookup_user_name = await client.read_resource("users://main_server/name/foo")
         assert isinstance(lookup_user_name[0], TextResourceContents)
         lookup_user_name_text = lookup_user_name[0].text
         logger.info(f"{lookup_user_name_text = }\n")
 
-        # Get prompts.
+        # Get main server prompts.
         roleplay_scenario_result = await client.get_prompt(
-            "roleplay_scenario",
+            "main_server_roleplay_scenario",
             {"character": "Alice", "situation": "a complex problem"},
         )
         for message in roleplay_scenario_result.messages:
@@ -172,13 +156,20 @@ async def _run_client(
             logger.info(f"Content: {message.content}\n")
 
         error_correction_result = await client.get_prompt(
-            "error_correction", {"error_info_str": "some complex error trace"}
+            "main_server_/chat_error_correction",
+            {"error_info_str": "some complex error trace"},
         )
         message = error_correction_result.messages[0]
         assert isinstance(message, PromptMessage)
         assert isinstance(message.content, TextContent)
         error_correction_prompt = message.content.text
         logger.info(f"{error_correction_prompt = }\n")
+
+        # Call external server tools.
+        get_weather_result = await client.call_tool(
+            "external_server_get_weather", {"city": "Northville"}
+        )
+        logger.info(f"{get_weather_result.data = }\n")
 
     logger.info(f"Client connection closed. Connection status: {client.is_connected()}")
 

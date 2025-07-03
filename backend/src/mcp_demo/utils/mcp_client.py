@@ -1,8 +1,63 @@
 """This module contains MCP client utilities."""
 
+# Standard Library
+from pathlib import Path
+
 # Third Party Library
 from fastmcp import Client
+from fastmcp.client.auth import BearerAuth
+from fastmcp.utilities.mcp_config import MCPConfig, RemoteMCPServer
 from loguru import logger
+
+# Package Library
+from mcp_demo.config import Settings
+
+
+def get_mcp_config(
+    *, host: str, port: int, server_mount_path: str, transport: str
+) -> MCPConfig:
+    """Get the MCP client configuration.
+
+    Parameters
+    ----------
+    host
+        The host address for the MCP client.
+    port
+        The port number for the MCP client.
+    server_mount_path
+        The mount path for the MCP server.
+    transport
+        The transport type for the MCP client.
+
+    Returns
+    -------
+    MCPConfig
+        A configuration object for the MCP client, containing the server information
+        and authentication details.
+    """
+
+    # Read the access token from its temporary file. DO NOT DO THIS IN PRODUCTION!
+    # This is just for demonstration purposes.
+    token_fp = Path("/tmp") / "mcp_demo_token.txt"
+    with token_fp.open("r") as f:
+        access_token = f.read().strip()
+
+    mcp_config = MCPConfig(
+        mcpServers={
+            "main_server": RemoteMCPServer(
+                auth=BearerAuth(token=access_token),
+                transport=transport,
+                url=f"http://{host}:{port}/{server_mount_path}",
+            ),
+            "external_server": RemoteMCPServer(
+                auth=None,
+                transport=Settings.EXTERNAL_FASTMCP_TRANSPORT,
+                url=f"http://{Settings.EXTERNAL_FASTMCP_HOST}:{Settings.EXTERNAL_FASTMCP_PORT}/{Settings.EXTERNAL_FASTMCP_MOUNT_PATH}",
+            ),
+        }
+    )
+    logger.debug(f"{mcp_config = }")
+    return mcp_config
 
 
 async def list_prompts(*, client: Client, verbose: bool = False) -> None:

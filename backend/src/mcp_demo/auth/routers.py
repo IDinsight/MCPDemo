@@ -18,6 +18,9 @@ flows like refresh or consent screens — ideal for service-to-service setups.
 """
 
 # Standard Library
+import os
+
+from pathlib import Path
 from typing import Any
 
 # Third Party Library
@@ -88,6 +91,13 @@ async def issue_token(user: dict[str, Any] = Depends(verify_user)) -> TokenRespo
         scopes=user["scopes"],
         sub=user["sub"],
     )
+
+    # Write the token to disk for usage in other shells, applications, etc. DO NOT DO
+    # THIS IN PRODUCTION! This is just for demonstration purposes.
+    token_fp = Path("/tmp") / "mcp_demo_token.txt"
+    with token_fp.open("w") as f:
+        f.write(token)
+    os.chmod(token_fp, 0o600)
 
     return TokenResponse(
         access_token=token, expires_in=Settings.AUTH_TOKEN_TTL, token_type="bearer"

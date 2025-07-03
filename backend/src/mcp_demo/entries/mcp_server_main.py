@@ -37,8 +37,7 @@ if __name__ == "__main__":
 
 # Package Library
 from mcp_demo.config import Settings
-from mcp_demo.utils.general import yaml_serializer
-from mcp_demo.utils.mcp_server import create_mcp_server_app
+from mcp_demo.utils.mcp_server import create_mcp_server_app, get_bearer_auth_provider
 
 assert (
     sys.version_info.major >= 3 and sys.version_info.minor >= 11
@@ -53,39 +52,45 @@ cli = typer.Typer()
 
 
 @dataclass
-class MCPServerContext:
-    """Context for the MCP server application."""
+class ChatMCPServerContext:
+    """Context for the chat MCP server application."""
 
     redis_client: aioredis.Redis
+
+
+@dataclass
+class MainMCPServerContext:
+    """Context for the main MCP server application."""
+
     runtime_context: str
 
     some_text: str = "This is the context for the main MCP server."
 
 
 @asynccontextmanager
-async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
-    """Lifespan events for the main MCP server application.
+async def lifespan_chat_server(server: FastMCP) -> AsyncIterator[ChatMCPServerContext]:
+    """Lifespan events for the chat MCP server application.
 
     The process is as follows:
 
-    1. List the MCP server tools (for demonstration purposes).
-    2. Initialize Redis client for the MCP server.
-    3. Yield control to the MCP server application.
-    4. Close the Redis connection when the MCP server application finishes.
-    5. Close the MCP server when the application finishes.
+    1. List the chat MCP server tools (for demonstration purposes).
+    2. Initialize Redis client for the chat MCP server.
+    3. Yield control to the chat MCP server application.
+    4. Close the Redis connection when the chat MCP server application finishes.
+    5. Perform any necessary cleanup when the chat MCP server application finishes.
 
     Parameters
     ----------
     server
-        The MCP server instance.
+        The chat MCP server instance.
 
     Yields
     ------
-    AsyncIterator[MCPServerContext]
-        A context manager that provides control to the main MCP server application.
+    AsyncIterator[ChatMCPServerContext]
+        A context manager that provides control to the chat MCP server application.
     """
 
-    logger.info("Starting main MCP server application...")
+    logger.info("Starting chat MCP server application...")
 
     redis_client: aioredis.Redis | None = None
 
@@ -93,21 +98,22 @@ async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
         # 1.
         server_tools = await server.get_tools()
         server_tool_names = list(server_tools.keys())
-        logger.info(f"Available tools server-side: {server_tool_names}")
+        logger.info(f"Available tools chat server-side: {server_tool_names}")
 
         server_resources = await server.get_resources()
         server_resource_names = list(server_resources.keys())
-        logger.info(f"Available resources server-side: {server_resource_names}")
+        logger.info(f"Available resources chat server-side: {server_resource_names}")
 
-        server_resource_tempaltes = await server.get_resource_templates()
-        server_resource_template_names = list(server_resource_tempaltes.keys())
+        server_resource_templates = await server.get_resource_templates()
+        server_resource_template_names = list(server_resource_templates.keys())
         logger.info(
-            f"Available resource templates server-side: {server_resource_template_names}"
+            f"Available resource templates chat server-side: "
+            f"{server_resource_template_names}"
         )
 
         server_prompts = await server.get_prompts()
         server_prompt_names = list(server_prompts.keys())
-        logger.info(f"Available prompts server-side: {server_prompt_names}")
+        logger.info(f"Available prompts chat server-side: {server_prompt_names}")
 
         # 2.
         logger.info("Initializing Redis client...")
@@ -118,7 +124,7 @@ async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
         # 3.
         logger.log("CELEBRATE", "Ready to roll! 🚀")
 
-        yield MCPServerContext(redis_client=redis_client, runtime_context="new context")
+        yield ChatMCPServerContext(redis_client=redis_client)
     finally:
         if isinstance(redis_client, aioredis.Redis):
             # 4.
@@ -127,27 +133,101 @@ async def lifespan_mcp(server: FastMCP) -> AsyncIterator[MCPServerContext]:
             logger.success("Redis connection closed!")
 
         # 5.
+        logger.success("Chat MCP server application finished!")
+
+
+@asynccontextmanager
+async def lifespan_main_server(server: FastMCP) -> AsyncIterator[MainMCPServerContext]:
+    """Lifespan events for the main MCP server application.
+
+    The process is as follows:
+
+    1. List the main MCP server components (for demonstration purposes).
+    2. Yield control to the main MCP server application.
+    3. Perform any necessary cleanup when the main MCP server application finishes.
+
+    Parameters
+    ----------
+    server
+        The main MCP server instance.
+
+    Yields
+    ------
+    AsyncIterator[MainMCPServerContext]
+        A context manager that provides control to the main MCP server application.
+    """
+
+    logger.info("Starting main MCP server application...")
+
+    try:
+        # 1.
+        server_tools = await server.get_tools()
+        server_tool_names = list(server_tools.keys())
+        logger.info(f"Available tools main server-side: {server_tool_names}")
+
+        server_resources = await server.get_resources()
+        server_resource_names = list(server_resources.keys())
+        logger.info(f"Available resources main server-side: {server_resource_names}")
+
+        server_resource_templates = await server.get_resource_templates()
+        server_resource_template_names = list(server_resource_templates.keys())
+        logger.info(
+            f"Available resource templates main server-side: "
+            f"{server_resource_template_names}"
+        )
+
+        server_prompts = await server.get_prompts()
+        server_prompt_names = list(server_prompts.keys())
+        logger.info(f"Available prompts main server-side: {server_prompt_names}")
+
+        # 2.
+        logger.log("CELEBRATE", "Ready to roll! 🚀")
+
+        yield MainMCPServerContext(runtime_context="new context")
+    finally:
+        # 3.
         logger.success("Main MCP server application finished!")
 
 
-# Create the MCP server application instance.
-app, _ = create_mcp_server_app(
+# Create the main MCP server application instance.
+app_main, mcp_main = create_mcp_server_app(
+    auth=get_bearer_auth_provider(),  # Use BearerAuthProvider for authentication
     exclude_tags={"deprecated", "internal"},  # Hide these tagged components
     instructions="This is the main MCP server.",
-    lifespan=lifespan_mcp,
+    lifespan=lifespan_main_server,
     mask_error_details=True,  # Mask error details in responses and defer to ToolError for security reasons
     mcp_app_mount_path=FASTMCP_MOUNT_PATH,
     on_duplicate_prompts="error",
     on_duplicate_resources="error",
     on_duplicate_tools="error",
     register_modules={
-        "mcp_demo.prompts.mcp_prompts",
+        "mcp_demo.prompts.base",
         "mcp_demo.resources.basic_resources",
         "mcp_demo.tools.basic_tools",
     },
     server_name="Main Server",
-    tool_serializer=yaml_serializer,
 )
+
+# Create the chat MCP server application instance.
+app_chat, mcp_chat = create_mcp_server_app(
+    auth=get_bearer_auth_provider(),  # Use BearerAuthProvider for authentication
+    exclude_tags={"deprecated", "internal"},  # Hide these tagged components
+    instructions="This MCP server handles LLM chat functionalities.",
+    lifespan=lifespan_chat_server,
+    mask_error_details=True,  # Mask error details in responses and defer to ToolError for security reasons
+    mcp_app_mount_path=FASTMCP_MOUNT_PATH,
+    on_duplicate_prompts="error",
+    on_duplicate_resources="error",
+    on_duplicate_tools="error",
+    register_modules={"mcp_demo.prompts.chat"},
+    server_name="Chat Server",
+)
+
+# Mount the chat MCP server application to the main MCP server application.
+# NB: FastMCP automatically uses proxy mounting when the mounted server has a custom
+# lifespan but you can override this behavior by setting `as_proxy=False`.
+# ref: https://gofastmcp.com/servers/composition#direct-vs-proxy-mounting
+mcp_main.mount(mcp_chat, prefix="/chat")
 
 
 @cli.command()
@@ -195,7 +275,7 @@ def main(
     project_dir = Path(os.getenv("PATHS_PROJECT_DIR", ""))
     assert project_dir.is_dir(), f"'{project_dir}' is not a directory."
     uvicorn.run(
-        "mcp_demo.entries.mcp_server_main:app",
+        "mcp_demo.entries.mcp_server_main:app_main",
         host=host,
         port=port,
         log_config=None,  # Disable Uvicorn's default logging config

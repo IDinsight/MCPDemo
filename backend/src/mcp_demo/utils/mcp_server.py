@@ -1,5 +1,8 @@
 """This module contains MCP server utilities."""
 
+# Future Library
+from __future__ import annotations
+
 # Standard Library
 from importlib import import_module
 from typing import Any, Callable
@@ -16,8 +19,125 @@ from mcp_demo.config import Settings
 __MCP: dict[str, tuple[Starlette, FastMCP]] = {}
 
 
+class MockMCP:
+    """Generic stand-in for the real FastMCP instance while it is not yet registered
+    in `__MCP`.
+
+    Any attribute access returns another `MockMCP`, so you can chain indefinitely:
+    `mcp.tools.foo.bar...`
+
+    Calling the object:
+        - If the call looks like a decorator, then return the function unchanged
+            (identity decorator).
+        - Otherwise, return itself, so further chaining is still possible.
+    """
+
+    __slots__ = ("_path",)
+
+    def __init__(self, *, path: str = "mcp") -> None:
+        """
+
+        Parameters
+        ----------
+        path
+            The path at which the mock MCP server is mounted. This is used to
+            differentiate between different mock instances.
+        """
+
+        self._path = path
+
+    def __getattr__(self, item: str) -> MockMCP:
+        """Return a new `MockMCP` instance with the path updated to include the item
+        accessed. This allows for chaining of attributes, simulating the behavior of a
+        real FastMCP instance.
+
+        Parameters
+        ----------
+        item
+            The name of the attribute being accessed.
+
+        Returns
+        -------
+        MockMCP
+            A new `MockMCP` instance with the updated path.
+        """
+
+        return MockMCP(path=f"{self._path}.{item}")
+
+    def __bool__(self) -> bool:
+        """Evaluate to False in truthy tests. This is useful to prevent the mock
+        instance from being treated as a valid FastMCP instance in conditional checks.
+
+        Returns
+        -------
+        bool
+            Always returns `False`, indicating that this is a mock instance and not a
+            real FastMCP instance.
+        """
+
+        return False
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Callable | MockMCP:
+        """Handle calls to the mock MCP instance. If called with a single callable
+        argument, it acts as an identity decorator, returning the function unchanged.
+        If called with no arguments or multiple arguments, it returns a new `MockMCP`
+        instance with the current path. This allows the mock to be used in a way that
+        mimics the behavior of a real FastMCP instance, while still allowing for
+        chaining of attributes.
+
+        Parameters
+        ----------
+        args
+            Positional arguments passed to the call.
+        kwargs
+            Keyword arguments passed to the call.
+
+        Returns
+        -------
+        Callable | MockMCP
+            If called with a single callable argument, returns that function unchanged
+            (identity decorator). Otherwise, returns a new `MockMCP` instance with the
+            current path.
+        """
+
+        # Used directly as a decorator (e.g., @mcp.prompt).
+        if args and len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+
+        # Used as a decorator factory (e..g., @mcp.prompt("name", opts=...)) or as a
+        # normal call (e.g., mcp.tools.analyse("file.csv")).
+        return MockMCP(path=f"{self._path}()")
+
+    def __repr__(self) -> str:
+        """Return a string representation of the mock MCP instance. This is useful for
+        debugging and logging, providing a clear indication that this is a mock
+        instance and showing the path at which it is mounted.
+
+        Returns
+        -------
+        str
+            A string representation of the mock MCP instance, indicating its path.
+        """
+
+        return f"<Mock MCP placeholder: {self._path}>"
+
+    def __str__(self) -> str:
+        """Return a string representation of the mock MCP instance. This is useful for
+        debugging and logging, providing a clear indication that this is a mock
+        instance and showing the path at which it is mounted.
+
+        Returns
+        -------
+        str
+            A string representation of the mock MCP instance, indicating its path.
+        """
+
+        return repr(self)
+
+
 def create_mcp_server_app(
     *,
+    auth: BearerAuthProvider | None = None,
     lifespan: Callable | None = None,
     mcp_app_mount_path: str = Settings.FASTMCP_MOUNT_PATH,
     register_modules: set[str] | None = None,
@@ -38,6 +158,9 @@ def create_mcp_server_app(
 
     Parameters
     ----------
+    auth
+        An optional authentication provider for the MCP server. If not provided, the
+        server will not have authentication enabled.
     lifespan
         An optional lifespan context manager for the MCP server application. If not
         provided, the MCP server will use its default lifespan management.
@@ -66,10 +189,7 @@ def create_mcp_server_app(
 
     # 2.
     mcp = FastMCP(
-        auth=get_bearer_auth_provider(),  # Use BearerAuthProvider for authentication
-        lifespan=lifespan,
-        name=server_name,
-        **kwargs,
+        auth=auth, json_response=True, lifespan=lifespan, name=server_name, **kwargs
     )
 
     # 3.
@@ -123,8 +243,9 @@ def get_bearer_auth_provider() -> BearerAuthProvider:
     return auth
 
 
-def get_mcp_server(*, server_name: str) -> FastMCP | None:
-    """Get the MCP server instance from the global variable.
+def get_mcp_server(*, server_name: str) -> FastMCP | MockMCP:
+    """Get the MCP server instance from the global variable. If the global variable
+    `__MCP` is empty, return a `MockMCP` instance.
 
     Parameters
     ----------
@@ -134,8 +255,8 @@ def get_mcp_server(*, server_name: str) -> FastMCP | None:
 
     Returns
     -------
-    FastMCP | None
-        The MCP server instance if it exists, otherwise `None`.
+    FastMCP | MockMCP
+        The MCP server instance if it exists, otherwise a `MockMCP` instance.
 
     Raises
     ------
@@ -145,7 +266,7 @@ def get_mcp_server(*, server_name: str) -> FastMCP | None:
 
     if not __MCP:
         logger.warning(f"MCP server is not initialized: {server_name}")
-        return None
+        return MockMCP(path=server_name)
 
     if server_name not in __MCP:
         raise KeyError(f"MCP server instance was not found: {server_name}")

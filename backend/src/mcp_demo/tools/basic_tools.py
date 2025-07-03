@@ -10,10 +10,9 @@ from fastmcp.server.dependencies import get_context, get_http_request
 from loguru import logger
 
 # Package Library
-from mcp_demo.tools.schemas import WeatherData
 from mcp_demo.utils.mcp_server import get_mcp_server
 
-mcp = get_mcp_server(server_name="Main Server")
+mcp_main = get_mcp_server(server_name="Main Server")
 
 
 class ATool:
@@ -51,10 +50,10 @@ class ATool:
 
 
 a_tool = ATool(name="A Tool")
-mcp.tool()(a_tool.my_tool_add)
+mcp_main.tool()(a_tool.my_tool_add)
 
 
-@mcp.tool()
+@mcp_main.tool()
 async def calculate_bmi(*, height: float, weight: float) -> float:
     """Async tool demonstration.
 
@@ -85,7 +84,7 @@ async def calculate_bmi(*, height: float, weight: float) -> float:
     return weight / (height**2)
 
 
-@mcp.tool(tags={"deprecated"})
+@mcp_main.tool(tags={"deprecated"})
 def deprecated_tool(*, a: int, b: int) -> int:
     """A deprecated tool that should not be used.
 
@@ -106,7 +105,7 @@ def deprecated_tool(*, a: int, b: int) -> int:
     return a + b
 
 
-@mcp.tool(enabled=False)
+@mcp_main.tool(enabled=False)
 async def disabled_tool(*, a: int, b: int) -> int:
     """An internal tool that should not be listed.
 
@@ -127,7 +126,7 @@ async def disabled_tool(*, a: int, b: int) -> int:
     return a + b
 
 
-@mcp.tool()
+@mcp_main.tool()
 def divide_with_error_handling(*, a: int, b: int) -> float:
     """Divide two numbers with error handling.
 
@@ -163,31 +162,7 @@ def divide_with_error_handling(*, a: int, b: int) -> float:
     return a / b
 
 
-@mcp.tool()
-def get_weather(*, city: str) -> WeatherData:
-    """Tool with structured output.
-
-    Parameters
-    ----------
-    city
-        The name of the city to get the weather for.
-
-    Returns
-    -------
-    WeatherData
-        A Pydantic model containing the weather data for the specified city.
-    """
-
-    return WeatherData(
-        city=city,
-        condition="partly cloudy",
-        humidity=65.0,
-        temperature=22.5,
-        wind_speed=12.3,
-    )
-
-
-@mcp.tool(tags={"internal"})
+@mcp_main.tool(tags={"internal"})
 async def internal_tool(*, a: int, b: int) -> int:
     """An internal tool that should not be listed.
 
@@ -208,7 +183,7 @@ async def internal_tool(*, a: int, b: int) -> int:
     return a + b
 
 
-@mcp.tool
+@mcp_main.tool
 async def user_agent_info() -> dict[str, Any]:
     """Return information about the user agent.
 

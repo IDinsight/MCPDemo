@@ -44,11 +44,22 @@ class BackendSettings(BaseSettings):
         "LITELLM_MODEL_EMBEDDING", "openai/embedding"
     )
 
+    # External MCP Server #
+    EXTERNAL_FASTMCP_HOST: str = "127.0.0.1"
+    EXTERNAL_FASTMCP_MOUNT_PATH: str = "external"
+    EXTERNAL_FASTMCP_PORT: int = 8200
+    EXTERNAL_FASTMCP_TRANSPORT: Literal["http", "sse", "stdio", "streamable-http"] = (
+        "http"
+    )
+
     # Logging
     LOGGING_LOG_LEVEL: str = "INFO"
 
+    # FastAPI
+    FASTAPI_HOST: str = "127.0.0.1"
+    FASTAPI_PORT: int = 8000
+
     # FastMCP
-    FASTMCP_DEBUG: bool = True
     FASTMCP_HOST: str = "127.0.0.1"
     FASTMCP_MOUNT_PATH: str = "mcp"
     FASTMCP_PORT: int = 8100

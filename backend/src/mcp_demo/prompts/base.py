@@ -1,8 +1,5 @@
 """This module contains the base class for all prompts."""
 
-# Standard Library
-from textwrap import dedent
-
 # Third Party Library
 import aiohttp
 
@@ -10,7 +7,13 @@ from fastmcp import Context
 from fastmcp.prompts.prompt import Message
 from mcp.types import PromptMessage
 
+# Package Library
+from mcp_demo.utils.mcp_server import get_mcp_server
 
+mcp_main = get_mcp_server(server_name="Main Server")
+
+
+@mcp_main.prompt
 def data_analysis_prompt(
     *,
     analysis_type: str = "summary",
@@ -42,6 +45,7 @@ def data_analysis_prompt(
     return prompt
 
 
+@mcp_main.prompt
 async def data_based_prompt(*, data_id: str) -> str:
     """Asynchronous prompt that generates a prompt based on data that needs to be
     fetched.
@@ -65,32 +69,7 @@ async def data_based_prompt(*, data_id: str) -> str:
             return f"Analyze this data: {data['content']}"
 
 
-def error_correction(*, error_info_str: str) -> str:
-    """Error correction prompt for LLMs.
-
-    Parameters
-    ----------
-    error_info_str
-        The string containing information about the error that occurred.
-
-    Returns
-    -------
-    str
-        A formatted prompt string for error correction.
-    """
-
-    return dedent(
-        f"""Your last message resulted in the following errors:
-
-⚠️ **Error during response validation**
-
-{error_info_str}
-
-Please correct your response and try again.
-        """
-    )
-
-
+@mcp_main.prompt
 async def generate_report_request(*, ctx: Context, report_type: str) -> str:
     """Generates a request for a report.
 
@@ -110,6 +89,7 @@ async def generate_report_request(*, ctx: Context, report_type: str) -> str:
     return f"Please create a {report_type} report. Request ID: {ctx.request_id}"
 
 
+@mcp_main.prompt
 def roleplay_scenario(*, character: str, situation: str) -> list[PromptMessage]:
     """Set up a role-playing scenario with initial messages.
 
