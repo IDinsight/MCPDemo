@@ -24,8 +24,13 @@ import typer
 import uvicorn
 
 from fastmcp import FastMCP
+from fastmcp.server.middleware.error_handling import (
+    ErrorHandlingMiddleware,
+    RetryMiddleware,
+)
 from fastmcp.server.middleware.logging import LoggingMiddleware
-from fastmcp.server.middleware.timing import DetailedTimingMiddleware, TimingMiddleware
+from fastmcp.server.middleware.rate_limiting import SlidingWindowRateLimitingMiddleware
+from fastmcp.server.middleware.timing import DetailedTimingMiddleware
 from loguru import logger
 from redis import asyncio as aioredis
 
@@ -201,8 +206,12 @@ app_main, mcp_main = create_mcp_server_app(
     mask_error_details=False,
     mcp_app_mount_path=FASTMCP_MOUNT_PATH,
     middleware=[
+        ErrorHandlingMiddleware(include_traceback=True, transform_errors=True),
+        RetryMiddleware(
+            max_retries=3, retry_exceptions=(ConnectionError, TimeoutError)
+        ),
+        SlidingWindowRateLimitingMiddleware(max_requests=100, window_minutes=1),
         DetailedTimingMiddleware(),
-        TimingMiddleware(),
         LoggingMiddleware(include_payloads=True, max_payload_length=1000),
         TagBasedMiddleware(),
     ],
