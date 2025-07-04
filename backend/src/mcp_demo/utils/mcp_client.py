@@ -6,6 +6,7 @@ from pathlib import Path
 # Third Party Library
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
+from fastmcp.client.logging import LogMessage
 from fastmcp.utilities.mcp_config import MCPConfig, RemoteMCPServer
 from loguru import logger
 
@@ -160,3 +161,17 @@ async def list_tools(*, client: Client, verbose: bool = False) -> None:
         if tool.inputSchema:
             tool_str += f"Tool Parameters:\n{tool.inputSchema}\n\n"
         logger.info(f"{tool_str}")
+
+
+async def log_handler(message: LogMessage) -> None:
+    """Handle log messages from the MCP server.
+
+    Parameters
+    ----------
+    message
+        The log message received from the MCP server.
+    """
+
+    level = message.level.upper()
+    data = message.data
+    logger.log(level, f"[{level}] {message.logger or 'Server'}: {data}")

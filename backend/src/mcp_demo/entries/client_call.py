@@ -43,6 +43,7 @@ from mcp_demo.utils.mcp_client import (
     list_resource_templates,
     list_resources,
     list_tools,
+    log_handler,
 )
 
 assert (
@@ -76,12 +77,13 @@ async def _run_client(
     """
 
     client: Client = Client(
+        log_handler=log_handler,
         transport=get_mcp_config(  # type: ignore
             host=host,
             port=port,
             server_mount_path=server_mount_path,
             transport=transport,
-        )
+        ),
     )
 
     async with client:
@@ -98,6 +100,9 @@ async def _run_client(
         await list_prompts(client=client)
 
         # Call main server tools.
+        greet_result = await client.call_tool("main_server_greet", {"name": "Foobar"})
+        logger.info(f"{greet_result = }")
+
         bmi_result = await client.call_tool(
             "main_server_calculate_bmi", {"height": 1.78, "weight": 72}, timeout=60
         )

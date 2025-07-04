@@ -53,7 +53,7 @@ a_tool = ATool(name="A Tool")
 mcp_main.tool()(a_tool.my_tool_add)
 
 
-@mcp_main.tool()
+@mcp_main.tool
 async def calculate_bmi(*, height: float, weight: float) -> float:
     """Async tool demonstration.
 
@@ -76,8 +76,9 @@ async def calculate_bmi(*, height: float, weight: float) -> float:
     """
 
     ctx = get_context()
-    await ctx.info(f"Calculating BMI for height: {height} m, weight: {weight} kg")
-
+    await ctx.info(
+        f"INFO FROM SERVER: Calculating BMI for height: {height} m, weight: {weight} kg"
+    )
     if height <= 0:
         raise ValueError("Height must be greater than zero.")
 
@@ -182,6 +183,26 @@ async def foobar_tool(*, a: int, b: int) -> int:
 
     logger.debug("This is the foobar tool and should not be listed due to middleware.")
     return a + b
+
+
+@mcp_main.tool
+async def greet(*, name: str) -> str:
+    """Greet a user with their name.
+
+    Parameters
+    ----------
+    name
+        The name of the user to greet.
+
+    Returns
+    -------
+    str
+        A greeting message for the user.
+    """
+
+    ctx = get_context()
+    await ctx.error("IN GREET.")
+    return f"Hello, {name}!"
 
 
 @mcp_main.tool(tags={"internal"})

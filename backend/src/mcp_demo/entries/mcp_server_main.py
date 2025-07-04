@@ -44,7 +44,7 @@ if __name__ == "__main__":
 
 # Package Library
 from mcp_demo.config import Settings
-from mcp_demo.middlewares.mcp_server import TagBasedMiddleware
+from mcp_demo.middlewares.mcp_ import TagBasedMiddleware
 from mcp_demo.utils.mcp_server import create_mcp_server_app, get_bearer_auth_provider
 
 assert (
@@ -225,6 +225,7 @@ app_main, mcp_main = create_mcp_server_app(
     },
     server_name="Main Server",
 )
+
 
 # Create the chat MCP server application instance.
 app_chat, mcp_chat = create_mcp_server_app(

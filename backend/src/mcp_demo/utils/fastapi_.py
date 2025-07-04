@@ -19,7 +19,7 @@ from redis import asyncio as aioredis
 # Package Library
 from mcp_demo import auth, users
 from mcp_demo.config import Settings
-from mcp_demo.prometheus_middleware import PrometheusMiddleware
+from mcp_demo.middlewares.prometheus_ import PrometheusMiddleware
 from mcp_demo.utils.general import make_dir
 
 DOMAIN_NAME = os.getenv("DOMAIN_NAME", "")
