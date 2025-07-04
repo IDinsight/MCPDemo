@@ -76,7 +76,7 @@ async def calculate_bmi(*, height: float, weight: float) -> float:
     """
 
     ctx = get_context()
-    await ctx.info(
+    await ctx.error(
         f"INFO FROM SERVER: Calculating BMI for height: {height} m, weight: {weight} kg"
     )
     if height <= 0:

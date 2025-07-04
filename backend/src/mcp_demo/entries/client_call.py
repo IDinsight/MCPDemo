@@ -85,7 +85,6 @@ async def _run_client(
             transport=transport,
         ),
     )
-
     async with client:
         logger.success(f"MCP client connection status: {client.is_connected()}")
 
@@ -181,7 +180,9 @@ async def _run_client(
         )
         logger.info(f"{get_weather_result.data = }\n")
 
-    logger.info(f"Client connection closed. Connection status: {client.is_connected()}")
+    logger.info(
+        f"Client connection closed. Connection status: " f"{client.is_connected()}"
+    )
 
 
 @cli.command()

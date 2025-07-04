@@ -26,7 +26,7 @@ class BackendSettings(BaseSettings):
     AUTH_RSA_KEY_SIZE: int = Field(3072, ge=1024)
     AUTH_RSA_PUBLIC_EXPONENT: int = Field(65537, ge=3, le=65537)
     AUTH_TOKEN_ISSUER: str = "https://tokens.local"
-    AUTH_TOKEN_TTL: int = 900  # 15 minutes
+    AUTH_TOKEN_TTL: int = 3600  # 1 hour
     AUTH_USER_NAME: str = Field("admin", description="Username for the MCP Demo user.")
     AUTH_USER_PASSPHRASE: SecretStr = Field(
         ..., description="Passphrase for the MCP Demo user."
