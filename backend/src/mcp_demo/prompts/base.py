@@ -90,13 +90,17 @@ async def generate_report_request(*, ctx: Context, report_type: str) -> str:
 
 
 @mcp_main.prompt
-def roleplay_scenario(*, character: str, situation: str) -> list[PromptMessage]:
+async def roleplay_scenario(
+    *, character: str, ctx: Context, situation: str
+) -> list[PromptMessage]:
     """Set up a role-playing scenario with initial messages.
 
     Parameters
     ----------
     character
         The character to roleplay as.
+    ctx
+        The context of the request, which includes metadata like request ID.
     situation
         The situation or context for the roleplay.
 
@@ -106,6 +110,7 @@ def roleplay_scenario(*, character: str, situation: str) -> list[PromptMessage]:
         A list of messages to initiate the roleplay scenario.
     """
 
+    await ctx.error("AHA!")
     return [
         Message(f"Let's roleplay. You are {character}. The situation is: {situation}"),
         Message("Okay, I understand. I am ready. What happens next?", role="assistant"),

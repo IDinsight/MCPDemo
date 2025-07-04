@@ -202,6 +202,7 @@ async def greet(*, name: str) -> str:
 
     ctx = get_context()
     await ctx.error("IN GREET.")
+    await ctx.report_progress(progress=50, total=100)
     return f"Hello, {name}!"
 
 
