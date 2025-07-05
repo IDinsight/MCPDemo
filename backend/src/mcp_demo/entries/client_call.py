@@ -128,7 +128,18 @@ async def _run_client(
         try:
             await client.call_tool("main_server_foobar_tool", {"a": 5, "b": 10})
         except ToolError as e:
-            logger.info(f"Calling foobar tool: {e}\n")
+            logger.error(f"Calling foobar tool: {e}\n")
+
+        send_notification_result = await client.call_tool(
+            "main_server_send_notification",
+            {"body": "Hello, World!", "subject": "Test", "to": "Foo"},
+        )
+        logger.info(f"{send_notification_result = }\n")
+
+        try:
+            await client.call_tool("main_server_add_positives_only", {"a": -5, "b": 10})
+        except ToolError as e:
+            logger.error(f"Calling add_positives_only: {e}\n")
 
         # Read main server resources.
         data_resource = await client.read_resource("data://main_server/3")

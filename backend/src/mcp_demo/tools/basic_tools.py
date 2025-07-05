@@ -1,12 +1,17 @@
 """This module contains examples of basic tools for the MCP demo application."""
 
 # Standard Library
+import os
+
 from typing import Any
 
 # Third Party Library
 from fastapi import Request
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_context, get_http_request
+from fastmcp.tools import Tool
+from fastmcp.tools.tool import ToolResult
+from fastmcp.tools.tool_transform import ArgTransform, forward
 from loguru import logger
 
 # Package Library
@@ -51,6 +56,64 @@ class ATool:
 
 a_tool = ATool(name="A Tool")
 mcp_main.tool()(a_tool.my_tool_add)
+
+
+@mcp_main.tool
+def add(*, a: float, b: float) -> float:
+    """Add two numbers together.
+
+    Parameters
+    ----------
+    a
+        The first number to add.
+    b
+        The second number to add.
+
+    Returns
+    -------
+    float
+        The sum of the two numbers.
+    """
+
+    return a + b
+
+
+async def ensure_positive(*, a: float, b: float) -> ToolResult:
+    """Ensure that both x and y are positive integers.
+
+    Parameters
+    ----------
+    a
+        The first number to check.
+    b
+        The second number to check.
+
+    Returns
+    -------
+    float
+        The result of the addition if both a and b are positive.
+
+    Raises
+    ------
+    ValueError
+        If either a or b is less than or equal to zero.
+
+    Returns
+    -------
+    ToolResult
+        The sum of a and b if both are positive.
+    """
+
+    if a <= 0 or b <= 0:
+        raise ValueError("a and b must be positive")
+
+    return await forward(a=a, b=b)
+
+
+add_ensure_positive = Tool.from_tool(
+    add, name="add_positives_only", transform_fn=ensure_positive
+)
+mcp_main.add_tool(add_ensure_positive)
 
 
 @mcp_main.tool
@@ -225,6 +288,43 @@ async def internal_tool(*, a: int, b: int) -> int:
 
     logger.debug("This is an internal tool and should not be listed.")
     return a + b
+
+
+@mcp_main.tool(enabled=False)
+def send_email(*, api_key: str, body: str, subject: str, to: str) -> dict[str, str]:
+    """Send an email.
+
+    Parameters
+    ----------
+    api_key
+        The API key for the email service.
+    body
+        The body of the email.
+    subject
+        The subject of the email.
+    to
+        The recipient's email address.
+
+    Returns
+    -------
+    dict[str, str]
+        A dictionary containing the email details.
+    """
+
+    logger.debug(f"{api_key = }")
+
+    return {"to": to, "subject": subject, "body": body}
+
+
+send_email_api_key_hidden = Tool.from_tool(
+    send_email,
+    name="send_notification",
+    transform_args={
+        "api_key": ArgTransform(default=os.environ.get("EMAIL_API_KEY", ""), hide=True)
+    },
+)
+
+mcp_main.add_tool(send_email_api_key_hidden)
 
 
 @mcp_main.tool
