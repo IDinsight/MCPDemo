@@ -453,9 +453,9 @@ fastapi-sso==0.16.0 \
     --hash=sha256:3a66a942474ef9756d3a9d8b945d55bd9faf99781facdb9b87a40b73d6d6b0c3 \
     --hash=sha256:f3941f986347566b7d3747c710cf474a907f581bfb6697ff3bb3e44eb76b438c
     # via litellm
-fastmcp==2.10.1 \
-    --hash=sha256:17d0acea04eeb3464c9eca42b6774fb06b38b72cface9af6a7482b3aa561db13 \
-    --hash=sha256:450c72e523926a2203c7eecdb4a8b0507506667bc8736b8b7bb44f6312424649
+fastmcp==2.10.2 \
+    --hash=sha256:1ad519fda8bfde1de7f54a7ed4be0b6353eb66230cc1e35eef29b47666a0027b \
+    --hash=sha256:3e5929772d5d22bad03581c2c4db40e008926309180168d48f3a7eac678ae645
     # via mcp-demo (pyproject.toml)
 filelock==3.18.0 \
     --hash=sha256:adbc88eabb99d2fec8c9c1b229b171f18afa655400173ddc653d5d01501fb9f2 \
@@ -1927,15 +1927,12 @@ typing-extensions==4.14.0 \
     --hash=sha256:a1514509136dd0b477638fc68d6a91497af5076466ad0fa6c338e44e359944af
     # via
     #   alembic
-    #   anyio
-    #   exceptiongroup
     #   fastapi
     #   huggingface-hub
     #   openai
     #   opentelemetry-api
     #   pydantic
     #   pydantic-core
-    #   referencing
     #   sqlalchemy
     #   typer
     #   typing-inspection

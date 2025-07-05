@@ -1,6 +1,6 @@
 #!make
 
-.PHONY: clean-docker clean-docker-container down-local help up-local
+.PHONY: clean-docker clean-docker-container down-dev down-local help up-dev up-local
 
 # Put it first so that "make" without argument is like "make help".
 help: ## Display available commands
@@ -85,3 +85,15 @@ clean-docker-container = \
 	docker stop $(1) || true; \
 	docker rm $(1) || true; \
 	docker system prune -f
+
+# Dev
+up-dev: ## Set up the development environment by starting all containers using Docker compose
+	@echo "$(RED)Spinning down any existing dev Docker containers...$(RESET)"
+	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -p mcp_demo-dev down
+	@echo "$(GREEN)Spinning up dev Docker containers...$(RESET)"
+	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -p mcp_demo-dev up --build -d --remove-orphans
+	@docker system prune -f
+
+down-dev: ## Tear down all development containers using Docker compose
+	@echo "$(RED)Spinning down dev Docker containers...$(RESET)"
+	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -p mcp_demo-dev down

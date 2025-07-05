@@ -1,0 +1,11 @@
+{$CADDY_DOMAIN_NAME:localhost} {
+    handle_path {$CADDY_BACKEND_ROOT:}/* {
+        reverse_proxy api:$FASTMCP_PORT {
+            transport http {
+                dial_timeout 100s
+                read_timeout 100s
+                write_timeout 100s
+            }
+        }
+    }
+}

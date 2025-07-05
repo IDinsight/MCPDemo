@@ -1,0 +1,80 @@
+# PATH variables must be set in .env files.
+services:
+  caddy:
+    container_name: caddy
+    depends_on:
+      - mcp
+    env_file:
+      - ${PATHS_PROJECT_DIR}/.env
+    image: caddy:2.7.6
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ${PATHS_PROJECT_DIR}/cicd/deployment/docker-compose/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_config:/config
+      - caddy_data:/data
+
+  mcp:
+    build:
+      context: ${PATHS_PROJECT_DIR}
+      dockerfile: backend/Dockerfile.mcp
+    container_name: mcp_demo
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ${PATHS_PROJECT_DIR}/.env
+      - ${PATHS_PROJECT_DIR}/backend/.env
+    environment:
+      - POSTGRES_HOST=db
+      - LITELLM_ENDPOINT=http://litellm-proxy:4000
+      - PATHS_BACKEND_ROOT=/mcp
+      - PATHS_PROJECT_DIR=/usr
+      - PATHS_SECRETS_DIR=/usr/secrets
+      - REDIS_HOST=redis://redis
+    expose:
+      - ${FASTMCP_PORT}
+    ports:
+      - ${FASTMCP_PORT}:${FASTMCP_PORT}
+
+  db:
+    container_name: postgres-vector
+    env_file:
+      - ${PATHS_PROJECT_DIR}/backend/.env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    image: ${DOCKER_PG_VECTOR_IMAGE}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  litellm-proxy:
+    command: ["--config", "/app/config.yaml", "--detailed_debug", "--telemetry", "False"]
+    container_name: litellm-proxy
+    env_file:
+      - ${PATHS_PROJECT_DIR}/cicd/litellm/.env
+    image: ${DOCKER_LITELLM_IMAGE}
+    ports:
+      - "4000:4000"
+    restart: always
+    volumes:
+      - ${PATHS_PROJECT_DIR}/cicd/litellm/litellm_config.yaml:/app/config.yaml
+
+  redis:
+    container_name: redis
+    image: ${DOCKER_REDIS_IMAGE}
+    ports:
+      - "6379:6379"
+    restart: always
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+  redis_data:
