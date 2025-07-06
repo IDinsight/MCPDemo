@@ -89,11 +89,11 @@ clean-docker-container = \
 # Dev
 up-dev: ## Set up the development environment by starting all containers using Docker compose
 	@echo "$(RED)Spinning down any existing dev Docker containers...$(RESET)"
-	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-mcp.yml -p mcp_demo-dev down
+	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-api.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-mcp.yml -p mcp_demo-dev down
 	@echo "$(GREEN)Spinning up dev Docker containers...$(RESET)"
-	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-mcp.yml -p mcp_demo-dev up --build -d --remove-orphans
+	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-api.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-mcp.yml -p mcp_demo-dev up --build -d --remove-orphans
 	@docker system prune -f
 
 down-dev: ## Tear down all development containers using Docker compose
 	@echo "$(RED)Spinning down dev Docker containers...$(RESET)"
-	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-mcp.yml -p mcp_demo-dev down
+	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-api.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-mcp.yml -p mcp_demo-dev down

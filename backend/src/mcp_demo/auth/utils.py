@@ -76,9 +76,9 @@ from mcp_demo.utils.general import atomic_write, make_dir
 _JWKS_CACHE: dict[str, Any] | None = None  # In-memory copy
 _JWKS_MTIME: float | None = None  # Last os.stat mtime
 
-PATHS_SECRETS_DIR = os.getenv("PATHS_SECRETS_DIR", None)
-assert PATHS_SECRETS_DIR is not None
-_SECRETS_DIR = Path(PATHS_SECRETS_DIR)
+PATHS_PROJECT_DIR = os.getenv("PATHS_PROJECT_DIR", None)
+assert PATHS_PROJECT_DIR is not None
+_SECRETS_DIR = Path(PATHS_PROJECT_DIR) / "secrets"
 make_dir(_SECRETS_DIR, mode=0o700)
 _LOCK = FileLock(str(_SECRETS_DIR / ".rotate.lock"), timeout=0)  # Non-blocking lock
 

@@ -1,22 +1,27 @@
 # PATH variables must be set in .env files.
 services:
-#  # Start auth service first so mcp service doesn't 404 when it tries to fetch
-#  # jwks.json.
-#  auth:
-#    build: ./auth            # or image: myrepo/auth:latest
-#    container_name: auth
-#    ports:
-#      - "8000:8000"          # expose POST /auth/token and GET /auth/jwks.json
-#    environment:
-#      # re-use the same values your FastAPI app already expects
-#      - AUTH_JWKS_FN=jwks.json
-#      - AUTH_TOKEN_ISSUER=https://tokens.local
-#      - AUTH_AUDIENCE=MCP_Demo_Server
-#      # user/passphrase etc. can come from a .env or Docker secrets
-#    networks:
-#      # All services join `mcp_network` to communicate with each other. This ensures
-#      # they can reach each other by service name (i.e., http://auth:8000).
-#      - mcp_network
+  # Start api service first so mcp service doesn't 404 when it tries to fetch jwks.json.
+  api:
+    build:
+      context: ${PATHS_PROJECT_DIR}
+      dockerfile: backend/Dockerfile.api
+    container_name: api-dev
+    environment:
+      # Re-use the same values that the FastAPI app expects.
+      - AUTH_AUDIENCE=${AUTH_AUDIENCE}
+      - AUTH_JWKS_FN=${AUTH_JWKS_FN}
+      - AUTH_TOKEN_ISSUER=https://tokens.local
+      - AUTH_TOKEN_TTL=${AUTH_TOKEN_TTL}
+      - AUTH_USER_NAME=${AUTH_USER_NAME}
+      - AUTH_USER_PASSPHRASE=${AUTH_USER_PASSPHRASE}
+      - PATHS_PROJECT_DIR=/usr
+      - PATHS_SECRETS_DIR=/usr/secrets
+    networks:
+      # All services join `mcp_network` to communicate with each other. This ensures
+      # they can reach each other by service name (i.e., http://api:8000).
+      - mcp_network
+    ports:
+      - "${DEV_FASTAPI_PORT}:${DEV_FASTAPI_PORT}"  # Expose POST /api/token and GET /api/jwks.json
   caddy:
     container_name: caddy-dev
     depends_on:
@@ -59,12 +64,15 @@ services:
       dockerfile: backend/Dockerfile.mcp
     container_name: mcp_demo-dev
     depends_on:
+      api:
+        condition: service_started
       db:
         condition: service_healthy
     env_file:
       - ${PATHS_PROJECT_DIR}/.env
       - ${PATHS_PROJECT_DIR}/backend/.env
     environment:
+      - AUTH_JWKS_URI=http://api:8000/auth/jwks.json  # Point JWKS URI at the service name (i.e., "api")
       - CHAT_ENV=dev
       - POSTGRES_HOST=db
       - LITELLM_ENDPOINT=http://litellm-proxy:4000
@@ -72,8 +80,6 @@ services:
       - PATHS_PROJECT_DIR=/usr
       - PATHS_SECRETS_DIR=/usr/secrets
       - REDIS_URL=redis://redis:6379
-    expose:
-      - "${DEV_FASTMCP_PORT}"
     ports:
       - "${DEV_FASTMCP_PORT}:${DEV_FASTMCP_PORT}"
   redis:
@@ -83,8 +89,8 @@ services:
       - "${DEV_REDIS_PORT}:${DEV_REDIS_PORT}"
     restart: always
 
-#networks:
-#  mcp_network: {}
+networks:
+  mcp_network: {}
 
 volumes:
   caddy_data:

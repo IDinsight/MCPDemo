@@ -1,0 +1,56 @@
+# BUILD STAGE #
+FROM python:3.11-slim-bookworm AS build
+
+ARG HOME_DIR=/usr/backend
+ENV PATH="/root/.local/bin:$PATH"
+ENV PYTHONPATH="${PYTHONPATH}:${HOME_DIR}/src"
+
+# Install build tools and system dependencies.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv globally.
+ADD https://astral.sh/uv/install.sh /uv-installer.sh
+RUN sh /uv-installer.sh && rm /uv-installer.sh
+
+# Set working directory.
+WORKDIR ${HOME_DIR}
+
+# Copy files and install requirements.
+COPY cicd/requirements/requirements.txt ./requirements.txt
+RUN uv pip install --system --requirement ./requirements.txt --no-cache-dir
+
+# Copy source code for any build steps.
+COPY . .
+
+# RUN STAGE #
+FROM python:3.11-slim-bookworm AS runtime
+
+ARG HOME_DIR=/usr/backend
+ENV PATH="/root/.local/bin:$PATH"
+ENV PYTHONPATH="${PYTHONPATH}:${HOME_DIR}/src"
+ENV PORT=${FASTAPI_PORT}
+
+# Install only required system libraries (no compilers, no git).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy uv from build stage.
+COPY --from=build /root/.local /root/.local
+
+# Copy installed site-packages.
+COPY --from=build /usr/backend /usr/backend
+
+# Set working directory.
+WORKDIR ${HOME_DIR}
+
+# Expose port and set default command.
+EXPOSE ${PORT}
+CMD ["uv", "run", "src/mcp_demo/entries/fastapi_app.py", "--no-reload", "--host", "0.0.0.0"]

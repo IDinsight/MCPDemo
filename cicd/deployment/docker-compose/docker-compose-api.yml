@@ -1,0 +1,6 @@
+# PATH variables must be set in .env files.
+services:
+  api:
+    volumes:
+      - ${PATHS_PROJECT_DIR}/backend:/usr/backend
+    restart: always
