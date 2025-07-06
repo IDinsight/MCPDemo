@@ -16,6 +16,10 @@ services:
       - AUTH_USER_PASSPHRASE=${AUTH_USER_PASSPHRASE}
       - PATHS_PROJECT_DIR=/usr
       - PATHS_SECRETS_DIR=/usr/secrets
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -fs http://localhost:8000/auth/jwks.json >/dev/null" ]
+      interval: 10s
+      retries: 5
     networks:
       # All services join `mcp_network` to communicate with each other. This ensures
       # they can reach each other by service name (i.e., http://api:8000).
