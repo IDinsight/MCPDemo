@@ -18,7 +18,7 @@ services:
       - PATHS_SECRETS_DIR=/usr/secrets
     healthcheck:
       test: [ "CMD-SHELL", "curl -fs http://localhost:8000/auth/jwks.json >/dev/null" ]
-      interval: 10s
+      interval: 60s
       retries: 5
     networks:
       # All services join `mcp_network` to communicate with each other. This ensures
@@ -43,6 +43,8 @@ services:
       - caddy_data:/data
   db:
     container_name: pg-vector-dev
+    env_file:
+      - ${PATHS_PROJECT_DIR}/backend/.env
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -78,6 +80,8 @@ services:
     environment:
       - AUTH_JWKS_URI=http://api:8000/auth/jwks.json  # Point JWKS URI at the service name (i.e., "api")
       - CHAT_ENV=dev
+      - FASTAPI_HOST=localhost
+      - FASTMCP_HOST=localhost
       - POSTGRES_HOST=db
       - LITELLM_ENDPOINT=http://litellm-proxy:4000
       - LOGGING_LOG_LEVEL=DEBUG

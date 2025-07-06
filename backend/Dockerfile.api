@@ -40,6 +40,7 @@ ENV PORT=${FASTAPI_PORT}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libpq-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy uv from build stage.
@@ -53,4 +54,4 @@ WORKDIR ${HOME_DIR}
 
 # Expose port and set default command.
 EXPOSE ${PORT}
-CMD ["uv", "run", "src/mcp_demo/entries/fastapi_app.py", "--no-reload", "--host", "0.0.0.0"]
+CMD ["uv", "run", "src/mcp_demo/entries/fastapi_app.py"]

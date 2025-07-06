@@ -53,4 +53,4 @@ WORKDIR ${HOME_DIR}
 
 # Expose port and set default command.
 EXPOSE ${PORT}
-CMD ["uv", "run", "src/mcp_demo/entries/mcp_server_main.py", "--no-reload", "--host", "0.0.0.0"]
+CMD ["uv", "run", "src/mcp_demo/entries/mcp_server_main.py"]

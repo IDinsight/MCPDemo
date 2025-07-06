@@ -204,7 +204,7 @@ def create_mcp_server_app(
     )
 
     # 3.
-    app = mcp.http_app(path=f"/{mcp_app_mount_path}")
+    app = mcp.http_app(path=f"/{mcp_app_mount_path}/")
 
     # 4.
     __MCP[server_name] = (app, mcp)

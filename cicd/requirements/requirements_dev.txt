@@ -2091,6 +2091,8 @@ typing-extensions==4.14.0 \
     --hash=sha256:a1514509136dd0b477638fc68d6a91497af5076466ad0fa6c338e44e359944af
     # via
     #   alembic
+    #   anyio
+    #   exceptiongroup
     #   fastapi
     #   huggingface-hub
     #   mypy
@@ -2098,6 +2100,7 @@ typing-extensions==4.14.0 \
     #   opentelemetry-api
     #   pydantic
     #   pydantic-core
+    #   referencing
     #   sqlalchemy
     #   typer
     #   typing-inspection
