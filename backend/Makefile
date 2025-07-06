@@ -50,27 +50,27 @@ lint-isort: ## Sort imports
 	@$(VENV)/bin/isort src/
 
 lint-black: ## Format code with Black
-	@echo "$(BLUE)Running Black on backend...$(RESET)"
+	@echo "$(BLUE)Running black on backend...$(RESET)"
 	@$(VENV)/bin/black src/
 
 lint-ruff: ## Run Ruff checks
-	@echo "$(BLUE)Running Ruff on backend...$(RESET)"
+	@echo "$(BLUE)Running ruff on backend...$(RESET)"
 	@$(VENV)/bin/ruff check src/
 
 lint-interrogate: ## Run Interrogate for docstring coverage
-	@echo "$(BLUE)Running Interrogate on backend...$(RESET)"
+	@echo "$(BLUE)Running interrogate on backend...$(RESET)"
 	@$(VENV)/bin/interrogate -v src/
 
 lint-mypy: ## Run MyPy for type checking
-	@echo "$(BLUE)Running MyPy on backend...$(RESET)"
+	@echo "$(BLUE)Running mypy on backend...$(RESET)"
 	@$(VENV)/bin/mypy src/ --ignore-missing-imports --show-error-codes
 
 lint-pylint: ## Run Pylint for code quality checks
-	@echo "$(BLUE)Running Pylint on backend...$(RESET)"
+	@echo "$(BLUE)Running pylint on backend...$(RESET)"
 	@$(VENV)/bin/pylint src/
 
 lint-cloc: ## Run CLOC for code statistics
-	@echo "$(BLUE)Running CLOC on backend...$(RESET)"
+	@echo "$(BLUE)Running cloc on backend...$(RESET)"
 	@cloc src/
 
 ########## UV ##########

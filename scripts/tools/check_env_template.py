@@ -7,7 +7,13 @@ from pathlib import Path
 
 # Folders that have paired .env / .template.env files. These paths are relative to the
 # location of the .pre-commit-config.yaml file.
-SECTIONS = [Path("."), Path("backend"), Path("frontend"), Path("cicd/litellm")]
+SECTIONS = [
+    Path("."),
+    Path("backend"),
+    Path("cicd/deployment/docker-compose"),
+    Path("cicd/litellm"),
+    Path("frontend"),
+]
 
 
 def keys(*, path: Path) -> set[str]:

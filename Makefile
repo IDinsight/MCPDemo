@@ -32,7 +32,7 @@ up-litellm: ## Set up LiteLLM container
 	@sleep 2
 	@echo "$(GREEN)Starting a new LiteLLM container...$(RESET)"
 	@docker run \
-		--name litellm-proxy \
+		--name litellm-proxy-local \
 		--rm \
 		-v "$(CURDIR)/cicd/litellm/litellm_config.yaml":/app/config.yaml \
 		--env-file "$(CURDIR)/cicd/litellm/.env" \
@@ -66,7 +66,7 @@ up-redis: ## Set up Redis container
 down-local: down-litellm down-pgvector down-redis ## Tear down all local development containers
 
 down-litellm: ## Tear down LiteLLM container
-	$(call clean-docker-container,litellm-proxy)
+	$(call clean-docker-container,litellm-proxy-local)
 
 down-pgvector: ## Tear down pg-vector container
 	$(call clean-docker-container,pg-vector-local)
@@ -89,11 +89,11 @@ clean-docker-container = \
 # Dev
 up-dev: ## Set up the development environment by starting all containers using Docker compose
 	@echo "$(RED)Spinning down any existing dev Docker containers...$(RESET)"
-	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -p mcp_demo-dev down
+	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-mcp.yml -p mcp_demo-dev down
 	@echo "$(GREEN)Spinning up dev Docker containers...$(RESET)"
-	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -p mcp_demo-dev up --build -d --remove-orphans
+	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-mcp.yml -p mcp_demo-dev up --build -d --remove-orphans
 	@docker system prune -f
 
 down-dev: ## Tear down all development containers using Docker compose
 	@echo "$(RED)Spinning down dev Docker containers...$(RESET)"
-	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -p mcp_demo-dev down
+	@docker compose -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-dev.yml -f ${CURDIR}/cicd/deployment/docker-compose/docker-compose-mcp.yml -p mcp_demo-dev down

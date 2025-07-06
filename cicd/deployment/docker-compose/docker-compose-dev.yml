@@ -1,6 +1,93 @@
 # PATH variables must be set in .env files.
 services:
-  mcp:
+#  # Start auth service first so mcp service doesn't 404 when it tries to fetch
+#  # jwks.json.
+#  auth:
+#    build: ./auth            # or image: myrepo/auth:latest
+#    container_name: auth
+#    ports:
+#      - "8000:8000"          # expose POST /auth/token and GET /auth/jwks.json
+#    environment:
+#      # re-use the same values your FastAPI app already expects
+#      - AUTH_JWKS_FN=jwks.json
+#      - AUTH_TOKEN_ISSUER=https://tokens.local
+#      - AUTH_AUDIENCE=MCP_Demo_Server
+#      # user/passphrase etc. can come from a .env or Docker secrets
+#    networks:
+#      # All services join `mcp_network` to communicate with each other. This ensures
+#      # they can reach each other by service name (i.e., http://auth:8000).
+#      - mcp_network
+  caddy:
+    container_name: caddy-dev
+    depends_on:
+      - mcp
+    env_file:
+      - .env
+    image: "${DEV_DOCKER_CADDY_IMAGE}"
+    ports:
+      - "${DEV_CADDY_HTTP_PORT}:${DEV_CADDY_HTTP_PORT}"
+      - "${DEV_CADDY_HTTPS_PORT}:${DEV_CADDY_HTTPS_PORT}"
+      - "${DEV_CADDY_UDP_PORT}:${DEV_CADDY_UDP_PORT}/udp"
     volumes:
-      - ${PATHS_PROJECT_DIR}/backend:/usr/backend
+      - ./Caddyfile-dev:/etc/caddy/Caddyfile
+      - caddy_config:/config
+      - caddy_data:/data
+  db:
+    container_name: pg-vector-dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    image: "${DEV_DOCKER_PG_VECTOR_IMAGE}"
+    ports:
+      - "${DEV_POSTGRES_PORT}:${DEV_POSTGRES_PORT}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  litellm-proxy:
+    command: ["--config", "/app/config.yaml", "--detailed_debug", "--telemetry", "False"]
+    container_name: litellm-proxy-dev
+    image: "${DEV_DOCKER_LITELLM_IMAGE}"
+    ports:
+      - "${DEV_LITELLM_PORT}:${DEV_LITELLM_PORT}"
     restart: always
+    volumes:
+      - ${PATHS_PROJECT_DIR}/cicd/litellm/litellm_config.yaml:/app/config.yaml
+  mcp:
+    build:
+      context: ${PATHS_PROJECT_DIR}
+      dockerfile: backend/Dockerfile.mcp
+    container_name: mcp_demo-dev
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ${PATHS_PROJECT_DIR}/.env
+      - ${PATHS_PROJECT_DIR}/backend/.env
+    environment:
+      - CHAT_ENV=dev
+      - POSTGRES_HOST=db
+      - LITELLM_ENDPOINT=http://litellm-proxy:4000
+      - LOGGING_LOG_LEVEL=DEBUG
+      - PATHS_PROJECT_DIR=/usr
+      - PATHS_SECRETS_DIR=/usr/secrets
+      - REDIS_URL=redis://redis:6379
+    expose:
+      - "${DEV_FASTMCP_PORT}"
+    ports:
+      - "${DEV_FASTMCP_PORT}:${DEV_FASTMCP_PORT}"
+  redis:
+    container_name: redis-dev
+    image: "${DEV_DOCKER_REDIS_IMAGE}"
+    ports:
+      - "${DEV_REDIS_PORT}:${DEV_REDIS_PORT}"
+    restart: always
+
+#networks:
+#  mcp_network: {}
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+  redis_data:
