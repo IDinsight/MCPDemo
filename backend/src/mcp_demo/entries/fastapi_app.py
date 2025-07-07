@@ -82,7 +82,7 @@ def main(
         detected.
     """
 
-    logger.info("Starting FastAPI with Uvicorn 🦄...")
+    logger.info(f"Starting FastAPI with Uvicorn 🦄 on {host}:{port}...")
 
     # 1.
     project_dir = Path(os.getenv("PATHS_PROJECT_DIR", ""))

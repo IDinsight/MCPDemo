@@ -21,7 +21,7 @@ class BackendSettings(BaseSettings):
     AUTH_FILELOCK_TIMEOUT: int = 2
     AUTH_JWK_ALGORITHM: str = "RS256"
     AUTH_JWKS_FN: str = "jwks.json"
-    AUTH_JWKS_URI: str = "http://localhost:8000/auth/jwks.json"
+    AUTH_JWKS_URI: str = "http://0.0.0.0:8000/auth/jwks.json"
     AUTH_ROTATION_KEEP_LAST_N: int = 2
     AUTH_RSA_KEY_SIZE: int = Field(3072, ge=1024)
     AUTH_RSA_PUBLIC_EXPONENT: int = Field(65537, ge=3, le=65537)
@@ -45,7 +45,7 @@ class BackendSettings(BaseSettings):
     )
 
     # External MCP Server #
-    EXTERNAL_FASTMCP_HOST: str = "127.0.0.1"
+    EXTERNAL_FASTMCP_HOST: str = "0.0.0.0"
     EXTERNAL_FASTMCP_MOUNT_PATH: str = "external"
     EXTERNAL_FASTMCP_PORT: int = 8200
     EXTERNAL_FASTMCP_TRANSPORT: Literal["http", "sse", "stdio", "streamable-http"] = (
@@ -56,11 +56,11 @@ class BackendSettings(BaseSettings):
     LOGGING_LOG_LEVEL: str = "INFO"
 
     # FastAPI
-    FASTAPI_HOST: str = "127.0.0.1"
+    FASTAPI_HOST: str = "0.0.0.0"
     FASTAPI_PORT: int = 8000
 
     # FastMCP
-    FASTMCP_HOST: str = "127.0.0.1"
+    FASTMCP_HOST: str = "0.0.0.0"
     FASTMCP_MOUNT_PATH: str = "mcp"
     FASTMCP_PORT: int = 8100
     FASTMCP_TRANSPORT: Literal["http", "sse", "stdio", "streamable-http"] = "http"

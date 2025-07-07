@@ -288,7 +288,7 @@ def main(
         detected.
     """
 
-    logger.info("Starting main MCP server with Uvicorn 🦄...")
+    logger.info(f"Starting main MCP server with Uvicorn 🦄 on {host}:{port}...")
 
     # 1.
     project_dir = Path(os.getenv("PATHS_PROJECT_DIR", ""))

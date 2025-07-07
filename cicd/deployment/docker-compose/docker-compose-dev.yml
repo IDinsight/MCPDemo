@@ -14,10 +14,16 @@ services:
       - AUTH_TOKEN_TTL=${AUTH_TOKEN_TTL}
       - AUTH_USER_NAME=${AUTH_USER_NAME}
       - AUTH_USER_PASSPHRASE=${AUTH_USER_PASSPHRASE}
+      - FASTAPI_HOST=0.0.0.0
+      - FASTMCP_HOST=0.0.0.0
+      - LITELLM_ENDPOINT=http://litellm-proxy:4000
+      - LOGGING_LOG_LEVEL=DEBUG
       - PATHS_PROJECT_DIR=/usr
       - PATHS_SECRETS_DIR=/usr/secrets
+      - POSTGRES_HOST=db
+      - REDIS_URL=redis://redis:6379
     healthcheck:
-      test: [ "CMD-SHELL", "curl -fs http://localhost:8000/auth/jwks.json >/dev/null" ]
+      test: [ "CMD-SHELL", "curl -fs http://0.0.0.0:8000/auth/jwks.json >/dev/null" ]
       interval: 60s
       retries: 5
     networks:
@@ -78,15 +84,21 @@ services:
       - ${PATHS_PROJECT_DIR}/.env
       - ${PATHS_PROJECT_DIR}/backend/.env
     environment:
+      - AUTH_AUDIENCE=${AUTH_AUDIENCE}
+      - AUTH_JWKS_FN=${AUTH_JWKS_FN}
       - AUTH_JWKS_URI=http://api:8000/auth/jwks.json  # Point JWKS URI at the service name (i.e., "api")
+      - AUTH_TOKEN_ISSUER=https://tokens.local
+      - AUTH_TOKEN_TTL=${AUTH_TOKEN_TTL}
+      - AUTH_USER_NAME=${AUTH_USER_NAME}
+      - AUTH_USER_PASSPHRASE=${AUTH_USER_PASSPHRASE}
       - CHAT_ENV=dev
-      - FASTAPI_HOST=localhost
-      - FASTMCP_HOST=localhost
-      - POSTGRES_HOST=db
+      - FASTAPI_HOST=0.0.0.0
+      - FASTMCP_HOST=0.0.0.0
       - LITELLM_ENDPOINT=http://litellm-proxy:4000
       - LOGGING_LOG_LEVEL=DEBUG
       - PATHS_PROJECT_DIR=/usr
       - PATHS_SECRETS_DIR=/usr/secrets
+      - POSTGRES_HOST=db
       - REDIS_URL=redis://redis:6379
     ports:
       - "${DEV_FASTMCP_PORT}:${DEV_FASTMCP_PORT}"
