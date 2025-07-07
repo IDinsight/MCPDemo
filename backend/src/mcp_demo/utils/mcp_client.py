@@ -1,8 +1,5 @@
 """This module contains MCP client utilities."""
 
-# Standard Library
-from pathlib import Path
-
 # Third Party Library
 import requests
 
@@ -14,6 +11,43 @@ from loguru import logger
 
 # Package Library
 from mcp_demo.config import Settings
+
+
+def get_bearer_auth_token() -> str:
+    """Get the bearer authentication token for the client.
+
+    Returns
+    -------
+    str
+        The bearer authentication token.
+
+    Raises
+    ------
+    RuntimeError
+        If the access token cannot be retrieved from the server.
+    ValueError
+        If the client_type is not 'docker' or 'local'.
+    """
+
+    url = "http://0.0.0.0:8000/auth/token"
+    payload = {
+        "password": Settings.AUTH_USER_PASSPHRASE.get_secret_value(),
+        "scope": "read",
+        "username": Settings.AUTH_USER_NAME,
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    response = requests.post(url, data=payload, headers=headers, timeout=60)
+    if response.ok:
+        token_data = response.json()
+        assert "access_token" in token_data, "Access token not found in response."
+    else:
+        logger.error(f"Failed to retrieve access token: {response.text}")
+        raise RuntimeError(
+            f"Failed to retrieve access token from {url}. "
+            "Please check the server configuration."
+        )
+
+    return token_data["access_token"]
 
 
 def get_mcp_config_docker(
@@ -48,24 +82,7 @@ def get_mcp_config_docker(
         If the access token cannot be retrieved from the server.
     """
 
-    url = "http://0.0.0.0:8000/auth/token"
-    payload = {
-        "password": Settings.AUTH_USER_PASSPHRASE.get_secret_value(),
-        "scope": "read",
-        "username": Settings.AUTH_USER_NAME,
-    }
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    response = requests.post(url, data=payload, headers=headers, timeout=60)
-    if response.ok:
-        token_data = response.json()
-        assert "access_token" in token_data, "Access token not found in response."
-    else:
-        logger.error(f"Failed to retrieve access token: {response.text}")
-        raise RuntimeError(
-            f"Failed to retrieve access token from {url}. "
-            "Please check the server configuration."
-        )
-    access_token = token_data["access_token"]
+    access_token = get_bearer_auth_token()
     server_config = {
         "main_server": RemoteMCPServer(
             auth=BearerAuth(token=access_token),
@@ -108,12 +125,7 @@ def get_mcp_config_local(
         and authentication details.
     """
 
-    # Read the access token from its temporary file. DO NOT DO THIS IN PRODUCTION!
-    # This is just for demonstration purposes.
-    token_fp = Path("/tmp") / "mcp_demo_token.txt"
-    with token_fp.open("r") as f:
-        access_token = f.read().strip()
-
+    access_token = get_bearer_auth_token()
     server_config = {
         "main_server": RemoteMCPServer(
             auth=BearerAuth(token=access_token),
