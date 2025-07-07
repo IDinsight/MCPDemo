@@ -89,7 +89,7 @@ async def check_if_users_exist(*, asession: AsyncSession) -> bool:
     return result.first() is not None
 
 
-async def delete_user_from_db(*, asession: AsyncSession, user_id: str) -> None:
+async def delete_user_from_db(*, asession: AsyncSession, user_id: int) -> None:
     """Delete a user from the database.
 
     Parameters
@@ -112,7 +112,7 @@ async def delete_user_from_db(*, asession: AsyncSession, user_id: str) -> None:
     await asession.commit()
 
 
-async def get_user_by_id(*, asession: AsyncSession, user_id: str) -> UserDB:
+async def get_user_by_id(*, asession: AsyncSession, user_id: int) -> UserDB:
     """Retrieve a user by user ID.
 
     Parameters
@@ -185,7 +185,7 @@ async def save_user_to_db(*, asession: AsyncSession, user: User) -> UserDB:
     return user_db
 
 
-async def update_user_in_db(*, asession: AsyncSession, user_id: str) -> UserDB:
+async def update_user_in_db(*, asession: AsyncSession, user_id: int) -> UserDB:
     """Update a user in the database.
 
     Parameters

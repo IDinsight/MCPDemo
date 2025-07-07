@@ -58,19 +58,29 @@ from typing import Any, AsyncIterator, cast
 # Third Party Library
 import jwt
 
+from authlib.jose import jwk
+from authlib.oauth2.rfc6749 import AuthorizationServer, InvalidRequestError, grants
+from authlib.oauth2.rfc6749.requests import BasicOAuth2Payload, OAuth2Request
+from authlib.oauth2.rfc7636 import CodeChallenge
+from authlib.oauth2.rfc9068 import JWTBearerTokenGenerator
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     load_pem_public_key,
 )
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from filelock import FileLock
 from loguru import logger
+from sqlalchemy import select
+from starlette.responses import JSONResponse, Response
 
 # Package Library
+from mcp_demo.auth.models import OAuth2AuthorizationCode, OAuth2Client, OAuth2Token
 from mcp_demo.config import Settings
+from mcp_demo.users.models import UserDB
+from mcp_demo.utils.database import get_async_session_managed
 from mcp_demo.utils.general import atomic_write, make_dir
 
 _JWKS_CACHE: dict[str, Any] | None = None  # In-memory copy
@@ -93,48 +103,413 @@ AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
 AUTH_TOKEN_TTL = Settings.AUTH_TOKEN_TTL
 
 
-@asynccontextmanager
-async def process_lock() -> AsyncIterator[None]:
-    """Context manager to acquire a process-wide lock.
+class AuthorizationCodeGrantPKCE(grants.AuthorizationCodeGrant):
+    """Authorization Code Grant with mandatory PKCE support for public clients.
 
-    This is useful for ensuring that only one process can perform certain operations
-    at a time, such as writing to a file or rotating keys. The lock is implemented
-    using a file lock, which is suitable for cross-process synchronization.
+    This subclass of Authlib's `AuthorizationCodeGrant` enforces the use of Proof Key
+    for Code Exchange (PKCE) by requiring both `code_challenge` and
+    `code_challenge_method` during the authorization request. It also implements
+    persistence layer hooks for saving, querying, authenticating, and deleting the
+    authorization codes in the database.
 
-    Notes:
+    Attributes inherited:
+    - TOKEN_ENDPOINT_AUTH_METHODS = ["none"] makes this grant suitable for public
+        clients (no client secret required).
 
-    1. Non-blocking acquire (blocking=False) means the worker thread returns
-        immediately.
-    2. We poll inside the event loop with a tiny asyncio.sleep, so the loop stays
-        responsive.
-    3. We raise quickly if exceeding the filelock timeout instead of tying up the
-        worker.
+    This class should be registered to `FastAPIAuthorizationServer` as follows:
 
-    Yields
-    ------
-    AsyncIterator[None]
-        A context manager that acquires the lock before yielding and releases it
-        after the block is executed.
+        server.register_grant(
+            AuthorizationCodeGrantPKCE, [CodeChallenge(required=True)]
+        )
+
+    The `CodeChallenge` extension ensures PKCE checks are enforced at runtime.
     """
 
-    deadline = time.monotonic() + AUTH_FILELOCK_TIMEOUT
-    backoff = 0.05  # 50 ms – tweak if needed
+    TOKEN_ENDPOINT_AUTH_METHODS = ["none"]
 
-    while True:
-        acquired = await asyncio.to_thread(_LOCK.acquire, blocking=False)
-        if acquired:
-            break
-        if time.monotonic() >= deadline:  # Hard ceiling
-            raise TimeoutError(
-                f"Could not obtain rotate.lock after {AUTH_FILELOCK_TIMEOUT}s"
+    async def authenticate_user(
+        self, authorization_code: OAuth2AuthorizationCode
+    ) -> UserDB:
+        """Retrieve the UserDB who originally granted permission for this authorization
+        code.
+
+        Parameters
+        ----------
+        authorization_code
+            The code record containing `user_id`.
+
+        Returns
+        -------
+        UserDB
+            The corresponding user object from the `UserDB` model.
+        """
+
+        async with get_async_session_managed() as db:
+            return await db.get(UserDB, authorization_code.user_id)
+
+    async def delete_authorization_code(
+        self, authorization_code: OAuth2AuthorizationCode
+    ) -> None:
+        """Delete the authorization code once it is exchanged for tokens.
+
+        Parameters
+        ----------
+        authorization_code
+            The persisted authorization code record to be removed.
+        """
+
+        async with get_async_session_managed() as db:
+            await db.delete(authorization_code)
+            await db.commit()
+
+    async def query_authorization_code(
+        self, code: str, client: OAuth2Client
+    ) -> OAuth2AuthorizationCode | None:
+        """Fetch a valid, non-expired authorization code belonging to the specified
+        client.
+
+        PKCE values (`code_challenge`, `code_challenge_method`) are persisted with the
+        code during `save_authorization_code`.
+
+        Parameters
+        ----------
+        code
+            The authorization code string provided by the client.
+        client
+            The client requesting token exchange; this code must belong to it.
+
+        Returns
+        -------
+        OAuth2AuthorizationCode | None
+            The matching code record or `None` if not found or expired.
+        """
+
+        async with get_async_session_managed() as db:
+            stmt = (
+                select(OAuth2AuthorizationCode)
+                .where(OAuth2AuthorizationCode.code == code)
+                .where(OAuth2AuthorizationCode.client_id == client.client_id)
             )
-        await asyncio.sleep(backoff)
-        backoff = min(backoff * 1.5, 0.5)  # Exponential back-off, cap at 500 ms
+            return await db.scalar_one_or_none(stmt)
 
-    try:
-        yield
-    finally:
-        _LOCK.release()
+    async def save_authorization_code(self, code: str, request: OAuth2Request) -> None:
+        """Persist the newly issued authorization code, including its PKCE fields. This
+        method is invoked during the `/authorize` endpoint flow.
+
+        Parameters
+        ----------
+        code
+            Randomly generated string as the authorization code.
+        request
+            The incoming authorization request, containing `client`, `redirect_uri`,
+            `scope`, `user`, and `data` that must include:
+                - code_challenge
+                - code_challenge_method
+
+        Raises
+        ------
+        InvalidRequestError
+            If the request does not contain the required PKCE fields.
+        """
+
+        code_challenge = request.data.get("code_challenge", None)
+        if not code_challenge:
+            raise InvalidRequestError("'code_challenge' is required for PKCE.")
+
+        code_challenge_method = request.data.get("code_challenge_method", None)
+        if not code_challenge_method:
+            raise InvalidRequestError("'code_challenge_method' is required for PKCE.")
+
+        async with get_async_session_managed() as db:
+            item = OAuth2AuthorizationCode(
+                code=code,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                client_id=request.client.client_id,
+                redirect_uri=request.redirect_uri,
+                scope=request.scope,
+                user_id=request.user.id,
+            )
+            db.add(item)
+            await db.commit()
+
+
+class FastAPIAuthorizationServer(AuthorizationServer):
+    """OAuth 2.1 Authorization Server tailored for FastAPI/Starlette requests.
+
+    This class extends Authlib's core `AuthorizationServer` to integrate with FastAPI
+    and Starlette, handling persistence hooks and request/response translation
+    out-of-the-box.
+
+    Features:
+        - **DB-backed** client lookups via `query_client()`
+        - **Token persistence** using `save_token()` into `OAuth2Token` table
+        - **Graceful Starlette integration**: consumes `fastapi.Request` and emits
+            `starlette.responses.Response` or `JSONResponse`
+        - **PKCE-compatible** when used with `AuthorizationCodeGrantPKCE`
+        - Log errors and wrap Authlib outcomes in HTTP-style objects
+        - Access-token revocation hooks are not enabled; see RFC 7009 if you need them.
+
+    Refer to Authlib docs for AuthorizationServer internals:
+        - Registration of grants and token generators
+        - Use of `CodeChallenge` extension for PKCE validation
+
+    Security notes:
+      - Requires HTTPS transport
+      - Works with `AuthorizationCodeGrantPKCE` for public-client support
+    """
+
+    async def create_oauth2_request(self, request: Request) -> OAuth2Request:
+        """Convert FastAPI/Starlette `Request` to Authlib `OAuth2Request`. This method
+        extracts HTTP method, full URL, headers, query params, and form data.
+
+        Parameters
+        ----------
+        request
+            The incoming FastAPI/Starlette request object.
+
+        Returns
+        -------
+        OAuth2Request
+            An instance of `StarletteOAuth2Request` containing the request data.
+        """
+
+        args_dict = dict(request.query_params)
+        form_dict = {}
+        if request.method in ["PATCH", "POST", "PUT"]:
+            form = await request.form()
+            form_dict = {k: str(v) for k, v in form.items()}
+
+        return StarletteOAuth2Request(
+            args=args_dict,
+            form=form_dict,
+            headers=dict(request.headers),
+            method=request.method,
+            uri=str(request.url),
+        )
+
+    def handle_response(
+        self,
+        status: int,
+        body: dict[str, Any] | list | str,
+        headers: dict[str, str] | None = None,
+    ) -> JSONResponse | Response:
+        """Convert Authlib internal status/body/headers to FastAPI/Starlette Response.
+
+        Parameters
+        ----------
+        status
+            The HTTP status code to return.
+        body
+            The response body, which can be a dict, list, or string.
+        headers
+            Optional headers to include in the response.
+
+        Returns
+        -------
+        JSONResponse | Response
+            A FastAPI-compatible response object containing the status, body, and
+            headers.
+        """
+
+        if status >= 400:
+            logger.error(f"OAuth error {status}: {body}")
+        headers = dict(headers or {})
+        if isinstance(body, (dict, list)):
+            return JSONResponse(content=body, status_code=status, headers=headers)
+
+        # Token endpoint returns urlencoded string.
+        return Response(content=body, status_code=status, headers=headers)
+
+    async def query_client(self, client_id: str) -> OAuth2Client | None:
+        """Lookup client by `client_id` from your DB.
+
+        Parameters
+        ----------
+        client_id
+            The unique identifier for the OAuth2 client.
+
+        Returns
+        -------
+        OAuth2Client | None
+            The client record if found, or `None` if not found.
+        """
+
+        async with get_async_session_managed() as db:
+            stmt = select(OAuth2Client).where(OAuth2Client.client_id == client_id)
+            return await db.scalar(stmt)
+
+    async def save_token(self, token: dict[str, Any], request: OAuth2Request) -> None:
+        """Persist issued tokens per Authlib requirements.
+
+        Parameters
+        ----------
+        token
+            The token data to be saved, typically containing `access_token`,
+        request
+            The OAuth2Request object containing client and user information.
+        """
+
+        async with get_async_session_managed() as db:
+            db.add(
+                OAuth2Token(
+                    client_id=request.client.client_id, user_id=request.user.id, **token
+                )
+            )
+            await db.commit()
+
+
+class MCPJWTGenerator(JWTBearerTokenGenerator):
+    """Issue RS256-signed JWT access tokens compliant with RFC 9068.
+
+    This class extends Authlib's `JWTBearerTokenGenerator` to:
+        - Sign access tokens with a given RSA private key and `kid`,
+        - Embed public key metadata in JWKS format for resource server discovery.
+
+    Notes
+    -----
+    1. Conforms to RFC 9068 (JSON Web Token (JWT) Profile for OAuth 2.0 Access Tokens).
+    2. The JWKS provided allows downstream resource servers to validate the JWT
+        signature.
+    3. The `kid` ensures clients/resolvers can select the correct key when multiple are
+        available.
+    """
+
+    def __init__(
+        self, *, kid: str, private_key: rsa.RSAPrivateKey, **kwargs: Any
+    ) -> None:
+        """
+
+        Parameters
+        ----------
+        kid
+            Key ID to include in both the JWT header and JWKS entry.
+        private_key
+            An RSA private key instance supporting `alg` (usually from `cryptography`).
+        **kwargs
+            Additional keyword arguments.
+        """
+
+        super().__init__(**kwargs)
+
+        self._jwk = jwk.dumps(private_key, alg=self.alg, kid=kid, kty="RSA", use="sig")
+
+    def get_jwks(self) -> dict[str, Any]:
+        """Return the JSON Web Key Set (JWKS) containing the public key. This enables
+        resource servers to fetch dynamic public keys for verifying JWT signatures
+        against rotating RSA key pairs.
+
+        Returns
+        -------
+        dict[str, Any]
+            A JWKS dict containing the public JWK, used by authorization servers to
+            expose available signing keys for resource servers (like FastMCP) to
+            validate tokens.
+        """
+
+        return {"keys": [self._jwk]}
+
+
+class StarletteOAuth2Request(OAuth2Request):
+    """FastAPI/Starlette adapter for Authlib's OAuth2Request model.
+
+    Authlib requires a framework-agnostic `OAuth2Request` to represent an incoming
+    OAuth token or authorization request. This subclass provides the minimal behavior
+    needed by Authlib, wrapping Starlette’s `Request` specifics (query params and form).
+
+    Notes
+    -----
+    1. This class is required by Authlib's AuthorizationServer integration. It enables
+        granting and validating flows (e.g., PKCE).
+    2. Must be created inside `FastAPIAuthorizationServer.create_oauth2_request()`, so
+        that Grant classes can operate properly.
+    """
+
+    def __init__(
+        self,
+        *,
+        args: dict[str, str],
+        form: dict[str, str],
+        headers: dict[str, str] | None,
+        method: str,
+        uri: str,
+    ) -> None:
+        """
+
+        Parameters
+        ----------
+        args
+            Query parameters (the `?` part of the URL).
+        form
+            Form-encoded body parameters (when `Content-Type` is
+            `application/x-www-form-urlencoded`).
+        headers
+            HTTP headers as a simple string-to-string mapping.
+        method
+            HTTP method of the request, e.g., "GET" or "POST".
+        uri
+            Full request URI, including path and query string.
+        """
+
+        super().__init__(method, uri, headers)
+
+        self._args = args
+        self._form = form
+
+        # Merge into a single dict for Authlib's BasicOAuth2Payload helper.
+        self.payload = BasicOAuth2Payload({**args, **form})
+
+    @property
+    def args(self) -> dict[str, str]:
+        """Return the query parameters of the request.
+
+        Example: `{'client_id': 'abc', 'scope': 'read write'}` extracted from the URL.
+
+        Returns
+        -------
+        dict[str, str]
+            The query parameters as a dictionary, where keys are parameter names and
+            values are their corresponding values.
+        """
+
+        return self._args
+
+    @property
+    def form(self) -> dict[str, str]:
+        """Return the form-encoded body data of the request.
+
+        Example: `{'grant_type': 'authorization_code', 'code': 'xyz', ...}` for token
+        exchanges.
+
+        Returns
+        -------
+        dict[str, str]
+            The form data as a dictionary, where keys are parameter names and values
+            are their corresponding values.
+        """
+
+        return self._form
+
+    @property
+    def scope(self) -> str | None:
+        """Return the OAuth scope as a single space-delimited string. The value is
+        looked up first in the form body (token exchange POST), then in the query
+        string (initial /authorize request).
+
+        Example: `read write` if the request included `scope=read write`.
+
+        Returns
+        -------
+        str | None
+            The requested scope string, e.g., `"read write"`, or `None` if no scope was
+            specified in the request.
+        """
+
+        if "scope" in self._form:
+            return self._form["scope"]
+        if "scope" in self._args:
+            return self._args["scope"]
+        return None
 
 
 def b64url(*, data: bytes) -> str:
@@ -154,6 +529,70 @@ def b64url(*, data: bytes) -> str:
     """
 
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+async def create_auth_server() -> AuthorizationServer:
+    """Build and configure the FastAPI OAuth 2.1 Authorization Server.
+
+    The returned `AuthorizationServer` is ready to be integrated into a FastAPI
+    application, offering:
+        - Authorization Code Grant with PKCE support
+        - RS256-signed JWT access tokens per RFC 9068
+        - Dynamic JWKS publishing via embedded key generator
+
+    Notes
+    -----
+    1. JWT access tokens conform to RFC 9068 and include the `kid` for key rotation.
+    2. PKCE is enforced to protect public clients without client secrets.
+    3. The `"default"` generator must be registered or Authlib will raise during login
+        flows.
+
+    The process is as follows:
+
+    1. Instantiate `FastAPIAuthorizationServer`, a subclass of Authlib's
+        `AuthorizationServer` designed for FastAPI.
+    2. Register the `AuthorizationCodeGrantPKCE`, enforcing PKCE using
+        `CodeChallenge(required=True)` for public-client security.
+    3. Load the current RSA key pair using `get_latest_private_key_and_kid()`, ensuring
+        integration with your existing key-rotation logic.
+    4. Create `MCPJWTGenerator` with:
+        - The private key and `kid`
+        - Issuer claim set to `"https://auth.local"`
+        - RS256 signing algorithm
+        - A fixed TTL from `AUTH_TOKEN_TTL` settings (default 900s)
+    5. Register the JWT generator under the `"default"` grant type, signifying it
+        should be used for all authorization grants.
+
+    Returns
+    -------
+    AuthorizationServer
+        Configured Authlib server instance, typically used in FastAPI routes.
+    """
+
+    # 1.
+    server = FastAPIAuthorizationServer()
+
+    # 2.
+    server.register_grant(AuthorizationCodeGrantPKCE, [CodeChallenge(required=True)])
+
+    # 3.
+    private_key, kid = await get_latest_private_key_and_kid(
+        passphrase=Settings.AUTH_USER_PASSPHRASE.get_secret_value()
+    )
+
+    # 4.
+    jwt_gen = MCPJWTGenerator(
+        alg="RS256",
+        expires_generator=lambda *_: AUTH_TOKEN_TTL,
+        issuer="https://auth.local",
+        private_key=private_key,
+        kid=kid,
+    )
+
+    # 5.
+    server.register_token_generator("default", jwt_gen)
+
+    return server
 
 
 def generate_rsa_keypair(
@@ -430,6 +869,50 @@ def load_public_key(*, public_key_fp: str | Path) -> rsa.RSAPublicKey:
         raise TypeError(f"Expected RSA public key, got {type(public_key).__name__}")
 
     return public_key
+
+
+@asynccontextmanager
+async def process_lock() -> AsyncIterator[None]:
+    """Context manager to acquire a process-wide lock.
+
+    This is useful for ensuring that only one process can perform certain operations
+    at a time, such as writing to a file or rotating keys. The lock is implemented
+    using a file lock, which is suitable for cross-process synchronization.
+
+    Notes:
+
+    1. Non-blocking acquire (blocking=False) means the worker thread returns
+        immediately.
+    2. We poll inside the event loop with a tiny asyncio.sleep, so the loop stays
+        responsive.
+    3. We raise quickly if exceeding the filelock timeout instead of tying up the
+        worker.
+
+    Yields
+    ------
+    AsyncIterator[None]
+        A context manager that acquires the lock before yielding and releases it
+        after the block is executed.
+    """
+
+    deadline = time.monotonic() + AUTH_FILELOCK_TIMEOUT
+    backoff = 0.05  # 50 ms – tweak if needed
+
+    while True:
+        acquired = await asyncio.to_thread(_LOCK.acquire, blocking=False)
+        if acquired:
+            break
+        if time.monotonic() >= deadline:  # Hard ceiling
+            raise TimeoutError(
+                f"Could not obtain rotate.lock after {AUTH_FILELOCK_TIMEOUT}s"
+            )
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 1.5, 0.5)  # Exponential back-off, cap at 500 ms
+
+    try:
+        yield
+    finally:
+        _LOCK.release()
 
 
 async def rotate_keys(

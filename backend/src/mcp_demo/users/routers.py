@@ -21,7 +21,7 @@ REDIS_CACHE_PREFIX_CHAT = Settings.REDIS_CACHE_PREFIX_CHAT
 
 @router.delete("/{user_id}", response_model=UserDeleteResponse)
 async def delete_user(
-    user_id: str,
+    user_id: int,
     asession: AsyncSession = Depends(get_async_session),
     csm: AsyncChatSessionManager = Depends(get_chat_session_manager),
 ) -> UserDeleteResponse:

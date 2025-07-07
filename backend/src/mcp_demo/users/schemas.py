@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 class User(BaseModel):
     """Pydantic model for users."""
 
-    user_id: str
+    user_id: int
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -16,6 +16,6 @@ class User(BaseModel):
 class UserDeleteResponse(BaseModel):
     """Pydantic model for user deletion response."""
 
-    user_id: str
+    user_id: int
 
     model_config = ConfigDict(from_attributes=True)

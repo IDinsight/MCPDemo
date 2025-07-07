@@ -5,7 +5,7 @@
 import contextlib
 
 from collections.abc import AsyncGenerator
-from typing import ContextManager, Generator
+from typing import AsyncIterator, ContextManager, Generator
 
 # Third Party Library
 from sqlalchemy import URL, Engine, MetaData, create_engine
@@ -70,6 +70,22 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     ------
     AsyncGenerator[AsyncSession, None]
         An async session generator.
+    """
+
+    async with AsyncSession(
+        get_async_engine(), expire_on_commit=False
+    ) as async_session:
+        yield async_session
+
+
+@contextlib.asynccontextmanager
+async def get_async_session_managed() -> AsyncIterator[AsyncSession]:
+    """Yield a managed SQLAlchemy async session generator.
+
+    Yields
+    ------
+    AsyncIterator[AsyncSession]
+        A managed async session generator.
     """
 
     async with AsyncSession(
