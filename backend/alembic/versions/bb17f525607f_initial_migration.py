@@ -1,8 +1,8 @@
 """Initial migration.
 
-Revision ID: dd7aa601b317
+Revision ID: bb17f525607f
 Revises:
-Create Date: 2025-07-07 16:16:00.354507
+Create Date: 2025-07-07 19:03:41.951476
 
 """
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "dd7aa601b317"
+revision: str = "bb17f525607f"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -75,9 +75,9 @@ def upgrade() -> None:
     )
     op.create_table(
         "oauth2_token",
+        sa.Column("client_id", sa.Integer(), nullable=False),
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("user_id", sa.Integer(), nullable=False),
-        sa.Column("client_id", sa.String(length=48), nullable=True),
         sa.Column("token_type", sa.String(length=40), nullable=True),
         sa.Column("access_token", sa.String(length=255), nullable=False),
         sa.Column("refresh_token", sa.String(length=255), nullable=True),
@@ -86,6 +86,11 @@ def upgrade() -> None:
         sa.Column("access_token_revoked_at", sa.Integer(), nullable=False),
         sa.Column("refresh_token_revoked_at", sa.Integer(), nullable=False),
         sa.Column("expires_in", sa.Integer(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["client_id"],
+            ["oauth2_client.id"],
+            name=op.f("fk_oauth2_token_client_id_oauth2_client"),
+        ),
         sa.ForeignKeyConstraint(
             ["user_id"], ["user.user_id"], name=op.f("fk_oauth2_token_user_id_user")
         ),

@@ -165,7 +165,7 @@ def get_session() -> Generator[Session, None, None]:
         yield session
 
 
-def get_session_context_manager() -> ContextManager[Session]:
+def get_session_managed() -> ContextManager[Session]:
     """Return a SQLAlchemy session context manager.
 
     Returns

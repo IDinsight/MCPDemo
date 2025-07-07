@@ -60,7 +60,11 @@ import jwt
 
 from authlib.jose import jwk
 from authlib.oauth2.rfc6749 import AuthorizationServer, InvalidRequestError, grants
-from authlib.oauth2.rfc6749.requests import BasicOAuth2Payload, OAuth2Request
+from authlib.oauth2.rfc6749.requests import (
+    BasicOAuth2Payload,
+    JsonRequest,
+    OAuth2Request,
+)
 from authlib.oauth2.rfc7636 import CodeChallenge
 from authlib.oauth2.rfc9068 import JWTBearerTokenGenerator
 from cryptography.hazmat.primitives import serialization
@@ -80,7 +84,7 @@ from starlette.responses import JSONResponse, Response
 from mcp_demo.auth.models import OAuth2AuthorizationCode, OAuth2Client, OAuth2Token
 from mcp_demo.config import Settings
 from mcp_demo.users.models import UserDB
-from mcp_demo.utils.database import get_async_session_managed
+from mcp_demo.utils.database import get_session_managed
 from mcp_demo.utils.general import atomic_write, make_dir
 
 _JWKS_CACHE: dict[str, Any] | None = None  # In-memory copy
@@ -127,9 +131,7 @@ class AuthorizationCodeGrantPKCE(grants.AuthorizationCodeGrant):
 
     TOKEN_ENDPOINT_AUTH_METHODS = ["none"]
 
-    async def authenticate_user(
-        self, authorization_code: OAuth2AuthorizationCode
-    ) -> UserDB:
+    def authenticate_user(self, authorization_code: OAuth2AuthorizationCode) -> UserDB:
         """Retrieve the UserDB who originally granted permission for this authorization
         code.
 
@@ -144,10 +146,10 @@ class AuthorizationCodeGrantPKCE(grants.AuthorizationCodeGrant):
             The corresponding user object from the `UserDB` model.
         """
 
-        async with get_async_session_managed() as db:
-            return await db.get(UserDB, authorization_code.user_id)
+        with get_session_managed() as db:
+            return db.get(UserDB, authorization_code.user_id)
 
-    async def delete_authorization_code(
+    def delete_authorization_code(
         self, authorization_code: OAuth2AuthorizationCode
     ) -> None:
         """Delete the authorization code once it is exchanged for tokens.
@@ -158,11 +160,11 @@ class AuthorizationCodeGrantPKCE(grants.AuthorizationCodeGrant):
             The persisted authorization code record to be removed.
         """
 
-        async with get_async_session_managed() as db:
-            await db.delete(authorization_code)
-            await db.commit()
+        with get_session_managed() as db:
+            db.delete(authorization_code)
+            db.commit()
 
-    async def query_authorization_code(
+    def query_authorization_code(
         self, code: str, client: OAuth2Client
     ) -> OAuth2AuthorizationCode | None:
         """Fetch a valid, non-expired authorization code belonging to the specified
@@ -184,15 +186,15 @@ class AuthorizationCodeGrantPKCE(grants.AuthorizationCodeGrant):
             The matching code record or `None` if not found or expired.
         """
 
-        async with get_async_session_managed() as db:
+        with get_session_managed() as db:
             stmt = (
                 select(OAuth2AuthorizationCode)
                 .where(OAuth2AuthorizationCode.code == code)
                 .where(OAuth2AuthorizationCode.client_id == client.client_id)
             )
-            return await db.scalar_one_or_none(stmt)
+            return db.scalar_one_or_none(stmt)
 
-    async def save_authorization_code(self, code: str, request: OAuth2Request) -> None:
+    def save_authorization_code(self, code: str, request: OAuth2Request) -> None:
         """Persist the newly issued authorization code, including its PKCE fields. This
         method is invoked during the `/authorize` endpoint flow.
 
@@ -220,7 +222,7 @@ class AuthorizationCodeGrantPKCE(grants.AuthorizationCodeGrant):
         if not code_challenge_method:
             raise InvalidRequestError("'code_challenge_method' is required for PKCE.")
 
-        async with get_async_session_managed() as db:
+        with get_session_managed() as db:
             item = OAuth2AuthorizationCode(
                 code=code,
                 code_challenge=code_challenge,
@@ -231,7 +233,7 @@ class AuthorizationCodeGrantPKCE(grants.AuthorizationCodeGrant):
                 user_id=request.user.id,
             )
             db.add(item)
-            await db.commit()
+            db.commit()
 
 
 class FastAPIAuthorizationServer(AuthorizationServer):
@@ -259,7 +261,31 @@ class FastAPIAuthorizationServer(AuthorizationServer):
       - Works with `AuthorizationCodeGrantPKCE` for public-client support
     """
 
-    async def create_oauth2_request(self, request: Request) -> OAuth2Request:
+    def create_json_request(self, request: Request) -> JsonRequest:
+        """Convert a FastAPI request with `application/json` body into Authlib’s
+        `JsonRequest` (thin wrapper around `dict`).
+
+        Only used by the forthcoming Pushed-Authorization-Request (PAR) and Device-Code
+        endpoints, but the method is *required* by Authlib’s ABC.
+
+        Parameters
+        ----------
+        request
+            The incoming FastAPI/Starlette request object.
+
+        Returns
+        -------
+        JsonRequest
+            An instance of `JsonRequest` containing the parsed JSON body and headers.
+        """
+
+        try:
+            payload = asyncio.run(request.json())
+        except ValueError:
+            payload = {}
+        return JsonRequest(payload, headers=dict(request.headers), uri=str(request.url))
+
+    def create_oauth2_request(self, request: Request) -> OAuth2Request:
         """Convert FastAPI/Starlette `Request` to Authlib `OAuth2Request`. This method
         extracts HTTP method, full URL, headers, query params, and form data.
 
@@ -275,9 +301,10 @@ class FastAPIAuthorizationServer(AuthorizationServer):
         """
 
         args_dict = dict(request.query_params)
-        form_dict = {}
+        form_dict: dict[str, str] = {}
         if request.method in ["PATCH", "POST", "PUT"]:
-            form = await request.form()
+            # Safe: body already buffered by Starlette.
+            form = asyncio.run(request.form())  # type: ignore
             form_dict = {k: str(v) for k, v in form.items()}
 
         return StarletteOAuth2Request(
@@ -290,7 +317,7 @@ class FastAPIAuthorizationServer(AuthorizationServer):
 
     def handle_response(
         self,
-        status: int,
+        status: int,  # pylint: disable=W0621
         body: dict[str, Any] | list | str,
         headers: dict[str, str] | None = None,
     ) -> JSONResponse | Response:
@@ -321,7 +348,7 @@ class FastAPIAuthorizationServer(AuthorizationServer):
         # Token endpoint returns urlencoded string.
         return Response(content=body, status_code=status, headers=headers)
 
-    async def query_client(self, client_id: str) -> OAuth2Client | None:
+    def query_client(self, client_id: str) -> OAuth2Client | None:
         """Lookup client by `client_id` from your DB.
 
         Parameters
@@ -335,11 +362,11 @@ class FastAPIAuthorizationServer(AuthorizationServer):
             The client record if found, or `None` if not found.
         """
 
-        async with get_async_session_managed() as db:
+        with get_session_managed() as db:
             stmt = select(OAuth2Client).where(OAuth2Client.client_id == client_id)
-            return await db.scalar(stmt)
+            return db.scalar(stmt)
 
-    async def save_token(self, token: dict[str, Any], request: OAuth2Request) -> None:
+    def save_token(self, token: dict[str, Any], request: OAuth2Request) -> None:
         """Persist issued tokens per Authlib requirements.
 
         Parameters
@@ -350,13 +377,28 @@ class FastAPIAuthorizationServer(AuthorizationServer):
             The OAuth2Request object containing client and user information.
         """
 
-        async with get_async_session_managed() as db:
+        with get_session_managed() as db:
             db.add(
                 OAuth2Token(
                     client_id=request.client.client_id, user_id=request.user.id, **token
                 )
             )
-            await db.commit()
+            db.commit()
+
+    def send_signal(self, name: str, *args: Any, **kwargs: Any) -> None:
+        """Emit a debug log instead of a Blinker signal.
+
+        Parameters
+        ----------
+        name
+            The name of the signal being emitted.
+        args
+            Additional positional arguments.
+        kwargs
+            Additional keyword arguments.
+        """
+
+        logger.debug(f"OAuth2 signal {name}: {args} | {kwargs}")
 
 
 class MCPJWTGenerator(JWTBearerTokenGenerator):
@@ -512,25 +554,6 @@ class StarletteOAuth2Request(OAuth2Request):
         return None
 
 
-def b64url(*, data: bytes) -> str:
-    """Return RFC 7515 base64url without padding.
-
-    Ref: https://datatracker.ietf.org/doc/html/rfc7515
-
-    Parameters
-    ----------
-    data
-        The data to be encoded in base64url format.
-
-    Returns
-    -------
-    str
-        The base64url encoded string without padding.
-    """
-
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
 async def create_auth_server() -> AuthorizationServer:
     """Build and configure the FastAPI OAuth 2.1 Authorization Server.
 
@@ -593,6 +616,25 @@ async def create_auth_server() -> AuthorizationServer:
     server.register_token_generator("default", jwt_gen)
 
     return server
+
+
+def b64url(*, data: bytes) -> str:
+    """Return RFC 7515 base64url without padding.
+
+    Ref: https://datatracker.ietf.org/doc/html/rfc7515
+
+    Parameters
+    ----------
+    data
+        The data to be encoded in base64url format.
+
+    Returns
+    -------
+    str
+        The base64url encoded string without padding.
+    """
+
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
 def generate_rsa_keypair(
