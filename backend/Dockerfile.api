@@ -34,7 +34,6 @@ FROM python:3.11-slim-bookworm AS runtime
 ARG HOME_DIR=/usr/backend
 ENV PATH="/root/.local/bin:$PATH"
 ENV PYTHONPATH="${PYTHONPATH}:${HOME_DIR}/src"
-ENV PORT=${FASTAPI_PORT}
 
 # Install only required system libraries (no compilers, no git).
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -46,12 +45,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy uv from build stage.
 COPY --from=build /root/.local /root/.local
 
-# Copy installed site-packages.
-COPY --from=build /usr/backend /usr/backend
+# Copy installed site-packages and source code.
+COPY --from=build /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=build /usr/src /usr/src
 
 # Set working directory.
 WORKDIR ${HOME_DIR}
 
-# Expose port and set default command.
-EXPOSE ${PORT}
-CMD ["uv", "run", "src/mcp_demo/entries/fastapi_app.py"]
+# Expose port for visibility and run default command.
+EXPOSE 8000
+CMD ["uv", "run", "src/mcp_demo/entries/fastapi_app.py", "--no-reload"]

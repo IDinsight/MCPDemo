@@ -4,6 +4,8 @@
 from pathlib import Path
 
 # Third Party Library
+import requests
+
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 from fastmcp.client.logging import LogMessage
@@ -14,15 +16,84 @@ from loguru import logger
 from mcp_demo.config import Settings
 
 
-def get_mcp_config(
-    *, host: str, port: int, server_mount_path: str, transport: str
+def get_mcp_config_docker(
+    *,
+    host: str,
+    port: int,
+    server_mount_path: str,
+    transport: str,
 ) -> MCPConfig:
-    """Get the MCP client configuration.
+    """Get the docker MCP client configuration.
 
     Parameters
     ----------
     host
         The host address for the MCP client.
+    port
+        The port number for the MCP client.
+    server_mount_path
+        The mount path for the MCP server.
+    transport
+        The transport type for the MCP client.
+
+    Returns
+    -------
+    MCPConfig
+        A configuration object for the MCP client, containing the server information
+        and authentication details.
+
+    Raises
+    ------
+    RuntimeError
+        If the access token cannot be retrieved from the server.
+    """
+
+    url = "http://0.0.0.0:8000/auth/token"
+    payload = {
+        "password": Settings.AUTH_USER_PASSPHRASE.get_secret_value(),
+        "scope": "read",
+        "username": Settings.AUTH_USER_NAME,
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    response = requests.post(url, data=payload, headers=headers, timeout=60)
+    if response.ok:
+        token_data = response.json()
+        assert "access_token" in token_data, "Access token not found in response."
+    else:
+        logger.error(f"Failed to retrieve access token: {response.text}")
+        raise RuntimeError(
+            f"Failed to retrieve access token from {url}. "
+            "Please check the server configuration."
+        )
+    access_token = token_data["access_token"]
+    server_config = {
+        "main_server": RemoteMCPServer(
+            auth=BearerAuth(token=access_token),
+            transport=transport,
+            url=f"http://{host}:{port}/{server_mount_path}",
+        )
+    }
+    mcp_config = MCPConfig(mcpServers=server_config)
+    logger.debug(f"{mcp_config = }")
+    return mcp_config
+
+
+def get_mcp_config_local(
+    *,
+    host: str,
+    include_external_servers: bool = False,
+    port: int,
+    server_mount_path: str,
+    transport: str,
+) -> MCPConfig:
+    """Get the local MCP client configuration.
+
+    Parameters
+    ----------
+    host
+        The host address for the MCP client.
+    include_external_servers
+        If True, include external MCP servers in the configuration.
     port
         The port number for the MCP client.
     server_mount_path
@@ -43,20 +114,20 @@ def get_mcp_config(
     with token_fp.open("r") as f:
         access_token = f.read().strip()
 
-    mcp_config = MCPConfig(
-        mcpServers={
-            "main_server": RemoteMCPServer(
-                auth=BearerAuth(token=access_token),
-                transport=transport,
-                url=f"http://{host}:{port}/{server_mount_path}",
-            ),
-            "external_server": RemoteMCPServer(
-                auth=None,
-                transport=Settings.EXTERNAL_FASTMCP_TRANSPORT,
-                url=f"http://{Settings.EXTERNAL_FASTMCP_HOST}:{Settings.EXTERNAL_FASTMCP_PORT}/{Settings.EXTERNAL_FASTMCP_MOUNT_PATH}",
-            ),
-        }
-    )
+    server_config = {
+        "main_server": RemoteMCPServer(
+            auth=BearerAuth(token=access_token),
+            transport=transport,
+            url=f"http://{host}:{port}/{server_mount_path}",
+        )
+    }
+    if include_external_servers:
+        server_config["external_server"] = RemoteMCPServer(
+            auth=None,
+            transport=Settings.EXTERNAL_FASTMCP_TRANSPORT,
+            url=f"http://{Settings.EXTERNAL_FASTMCP_HOST}:{Settings.EXTERNAL_FASTMCP_PORT}/{Settings.EXTERNAL_FASTMCP_MOUNT_PATH}",
+        )
+    mcp_config = MCPConfig(mcpServers=server_config)
     logger.debug(f"{mcp_config = }")
     return mcp_config
 

@@ -6,6 +6,9 @@ services:
       context: ${PATHS_PROJECT_DIR}
       dockerfile: backend/Dockerfile.api
     container_name: api-dev
+    env_file:
+      - ${PATHS_PROJECT_DIR}/.env
+      - ${PATHS_PROJECT_DIR}/backend/.env
     environment:
       # Re-use the same values that the FastAPI app expects.
       - AUTH_AUDIENCE=${AUTH_AUDIENCE}
@@ -14,28 +17,27 @@ services:
       - AUTH_TOKEN_TTL=${AUTH_TOKEN_TTL}
       - AUTH_USER_NAME=${AUTH_USER_NAME}
       - AUTH_USER_PASSPHRASE=${AUTH_USER_PASSPHRASE}
-      - FASTAPI_HOST=0.0.0.0
-      - FASTMCP_HOST=0.0.0.0
       - LITELLM_ENDPOINT=http://litellm-proxy:4000
-      - LOGGING_LOG_LEVEL=DEBUG
       - PATHS_PROJECT_DIR=/usr
       - PATHS_SECRETS_DIR=/usr/secrets
       - POSTGRES_HOST=db
       - REDIS_URL=redis://redis:6379
     healthcheck:
       test: [ "CMD-SHELL", "curl -fs http://0.0.0.0:8000/auth/jwks.json >/dev/null" ]
-      interval: 60s
+      interval: 10s
       retries: 5
-    networks:
-      # All services join `mcp_network` to communicate with each other. This ensures
-      # they can reach each other by service name (i.e., http://api:8000).
-      - mcp_network
     ports:
       - "${DEV_FASTAPI_PORT}:${DEV_FASTAPI_PORT}"  # Expose POST /api/token and GET /api/jwks.json
+    volumes:
+      - ${PATHS_PROJECT_DIR}/backend:/usr/backend
+      - venv_api:/usr/backend/.venv
   caddy:
     container_name: caddy-dev
     depends_on:
-      - mcp
+      api:
+        condition: service_healthy
+      mcp:
+        condition: service_started
     env_file:
       - .env
     image: "${DEV_DOCKER_CADDY_IMAGE}"
@@ -92,28 +94,29 @@ services:
       - AUTH_USER_NAME=${AUTH_USER_NAME}
       - AUTH_USER_PASSPHRASE=${AUTH_USER_PASSPHRASE}
       - CHAT_ENV=dev
-      - FASTAPI_HOST=0.0.0.0
-      - FASTMCP_HOST=0.0.0.0
       - LITELLM_ENDPOINT=http://litellm-proxy:4000
-      - LOGGING_LOG_LEVEL=DEBUG
       - PATHS_PROJECT_DIR=/usr
       - PATHS_SECRETS_DIR=/usr/secrets
       - POSTGRES_HOST=db
       - REDIS_URL=redis://redis:6379
     ports:
       - "${DEV_FASTMCP_PORT}:${DEV_FASTMCP_PORT}"
+    volumes:
+      - ${PATHS_PROJECT_DIR}/backend:/usr/backend
+      - venv_mcp:/usr/backend/.venv
   redis:
     container_name: redis-dev
     image: "${DEV_DOCKER_REDIS_IMAGE}"
     ports:
       - "${DEV_REDIS_PORT}:${DEV_REDIS_PORT}"
     restart: always
-
-networks:
-  mcp_network: {}
+    volumes:
+      - redis_data:/redis_data
 
 volumes:
   caddy_data:
   caddy_config:
   postgres_data:
   redis_data:
+  venv_api:
+  venv_mcp:

@@ -1,13 +1,14 @@
-"""This module contains the main entry point for the client.
+"""This module contains the main entry point for the client when calling the MCP server
+locally.
 
 From the backend directory of this project, this entry point can be invoked from the
 command line via:
 
-python -m src.mcp_demo.entries.client_call
+python -m src.mcp_demo.entries.client_call_local
 
 or
 
-python src/mcp_demo/entries/client_call.py
+python src/mcp_demo/entries/client_call_local.py
 """
 
 # pylint: disable=R0915
@@ -38,7 +39,7 @@ if __name__ == "__main__":
 # Package Library
 from mcp_demo.config import Settings
 from mcp_demo.utils.mcp_client import (
-    get_mcp_config,
+    get_mcp_config_local,
     list_prompts,
     list_resource_templates,
     list_resources,
@@ -78,8 +79,9 @@ async def _run_client(
 
     client: Client = Client(
         log_handler=log_handler,
-        transport=get_mcp_config(  # type: ignore
+        transport=get_mcp_config_local(  # type: ignore
             host=host,
+            include_external_servers=True,
             port=port,
             server_mount_path=server_mount_path,
             transport=transport,

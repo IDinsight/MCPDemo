@@ -1,5 +1,14 @@
 {$DEV_CADDY_DOMAIN_NAME:localhost} {
-    handle_path {$DEV_CADDY_BACKEND_ROOT:}/* {
+    handle_path {$DEV_CADDY_BACKEND_ROOT_API:}/api/* {
+        reverse_proxy api:{$DEV_FASTAPI_PORT} {
+            transport http {
+                dial_timeout 100s
+                read_timeout 100s
+                write_timeout 100s
+            }
+        }
+    }
+    handle_path {$DEV_CADDY_BACKEND_ROOT_MCP:}/mcp/* {
         reverse_proxy mcp:{$DEV_FASTMCP_PORT} {
             transport http {
                 dial_timeout 100s
