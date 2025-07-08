@@ -8,7 +8,8 @@ from pydantic import BaseModel, ConfigDict
 class User(BaseModel):
     """Pydantic model for users."""
 
-    user_id: int
+    password: str
+    username: str
 
     model_config = ConfigDict(from_attributes=True)
 

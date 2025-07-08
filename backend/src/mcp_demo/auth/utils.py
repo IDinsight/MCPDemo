@@ -58,7 +58,7 @@ from typing import Any, AsyncIterator, cast
 # Third Party Library
 import jwt
 
-from authlib.jose import jwk
+from authlib.jose import JsonWebKey
 from authlib.oauth2.rfc6749 import AuthorizationServer, InvalidRequestError, grants
 from authlib.oauth2.rfc6749.requests import (
     BasicOAuth2Payload,
@@ -425,16 +425,21 @@ class MCPJWTGenerator(JWTBearerTokenGenerator):
         Parameters
         ----------
         kid
-            Key ID to include in both the JWT header and JWKS entry.
+            Key-ID embedded in both the JWT header & JWKS so verifiers can pick the
+            right key after rotation.
         private_key
-            An RSA private key instance supporting `alg` (usually from `cryptography`).
+            An RSA *private* key (from `cryptography`) used to sign the token.
         **kwargs
             Additional keyword arguments.
         """
 
         super().__init__(**kwargs)
 
-        self._jwk = jwk.dumps(private_key, alg=self.alg, kid=kid, kty="RSA", use="sig")
+        # Convert the key to a public-only JWK **without** the private parts.
+        self._jwk = JsonWebKey.import_key(
+            private_key,  # Accepts PEM, key obj, etc.
+            {"kty": "RSA", "kid": kid, "alg": self.alg, "use": "sig"},
+        ).as_dict(is_private=False)
 
     def get_jwks(self) -> dict[str, Any]:
         """Return the JSON Web Key Set (JWKS) containing the public key. This enables
@@ -607,7 +612,7 @@ async def create_auth_server() -> AuthorizationServer:
     jwt_gen = MCPJWTGenerator(
         alg="RS256",
         expires_generator=lambda *_: AUTH_TOKEN_TTL,
-        issuer="https://auth.local",
+        issuer=Settings.AUTH_TOKEN_ISSUER,
         private_key=private_key,
         kid=kid,
     )

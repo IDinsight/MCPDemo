@@ -87,6 +87,7 @@ class BackendSettings(BaseSettings):
 
     # Redis
     REDIS_CACHE_PREFIX_CHAT: str = os.getenv("REDIS_CACHE_PREFIX_CHAT", "chat_sessions")
+    REDIS_CACHE_PREFIX_USER_DB_INITIALIZED: str = "USER_DB_INITIALIZED"
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
 
     # Sentry

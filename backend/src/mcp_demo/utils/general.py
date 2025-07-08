@@ -15,6 +15,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 # Third Party Library
+import bcrypt
 import yaml
 
 from loguru import logger
@@ -154,6 +155,26 @@ def escape_angle_brackets(x: Any) -> str:
     return recurse_replace(r"\>", ">", recurse_replace(r"\<", "<", str(x)))
 
 
+def hash_password(*, password: str) -> bytes:
+    """Hash a password using bcrypt.
+
+    Parameters
+    ----------
+    password
+        The password to hash.
+
+    Returns
+    -------
+    bytes
+        The hashed password.
+    """
+
+    pwd_bytes = password.encode("utf-8")
+    salt = bcrypt.gensalt()
+    hashed_password = bcrypt.hashpw(password=pwd_bytes, salt=salt)
+    return hashed_password
+
+
 def make_dir(dir_: str | Path, mode: int = 0o777, verbose: bool = True) -> None:
     """Create a directory.
 
@@ -230,6 +251,30 @@ def remove_json_markdown(*, text: str) -> str:
     text = re.sub(r"```(json)?\n", "", text).rstrip("```")
     text = text.replace(r"\{", "{").replace(r"\}", "}")
     return text.strip()
+
+
+def verify_password(
+    *, encoding: str = "utf-8", plain_password: str, hashed_password: bytes
+) -> bool:
+    """Verify a plain text password against a hashed password.
+
+    Parameters
+    ----------
+    encoding
+        The encoding to use for the plain password.
+    plain_password
+        The plain text password to verify.
+    hashed_password
+        The hashed password to verify against.
+
+    Returns
+    -------
+    bool
+        True if the plain password matches the hashed password, False otherwise.
+    """
+
+    password_byte_enc = plain_password.encode(encoding)
+    return bcrypt.checkpw(hashed_password=hashed_password, password=password_byte_enc)
 
 
 def yaml_serializer(data: dict[str, Any]) -> str:

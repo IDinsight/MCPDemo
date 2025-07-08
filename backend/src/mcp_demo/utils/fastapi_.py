@@ -18,14 +18,21 @@ from redis import asyncio as aioredis
 
 # Package Library
 from mcp_demo import auth, users
+from mcp_demo.auth.utils import create_auth_server
 from mcp_demo.config import Settings
 from mcp_demo.middlewares.prometheus_ import PrometheusMiddleware
+from mcp_demo.users.schemas import User
+from mcp_demo.users.utils import save_user_to_db
+from mcp_demo.utils.database import get_async_session_managed
 from mcp_demo.utils.general import make_dir
 
+AUTH_USER_NAME = Settings.AUTH_USER_NAME
+AUTH_USER_PASSPHRASE = Settings.AUTH_USER_PASSPHRASE
 DOMAIN_NAME = os.getenv("DOMAIN_NAME", "")
 REDIS_URL = Settings.REDIS_URL
 SENTRY_DSN = Settings.SENTRY_DSN
 SENTRY_TRACES_SAMPLE_RATE = Settings.SENTRY_TRACES_SAMPLE_RATE
+USER_DB_INITIALIZED = Settings.REDIS_CACHE_PREFIX_USER_DB_INITIALIZED
 
 
 def create_fastapi_app() -> FastAPI:
@@ -112,8 +119,10 @@ async def lifespan_fastapi(app: FastAPI) -> AsyncIterator[None]:
     The process is as follows:
 
     1. Initialize Redis client for the FastAPI application.
-    2. Yield control to the FastAPI application.
-    3. Close the Redis connection when the FastAPI application finishes.
+    2. Create the OAuth server for the FastAPI application.
+    3. Create the admin user for the demo.
+    4. Yield control to the FastAPI application.
+    5. Close the Redis connection when the FastAPI application finishes.
 
     Parameters
     ----------
@@ -137,11 +146,37 @@ async def lifespan_fastapi(app: FastAPI) -> AsyncIterator[None]:
         logger.success("Redis connection established!")
 
         # 2.
+        app.state.oauth_server = await create_auth_server()
+
+        # 3.
+        user_db_initialized = await app.state.redis.get(USER_DB_INITIALIZED)
+        if not user_db_initialized:
+            logger.info("Creating admin user in database...")
+            async with get_async_session_managed() as asession:
+                user_db = await save_user_to_db(
+                    asession=asession,
+                    user=User(
+                        password=AUTH_USER_PASSPHRASE.get_secret_value(),
+                        username=AUTH_USER_NAME,
+                    ),
+                )
+            await app.state.redis.set(USER_DB_INITIALIZED, "1")
+            logger.success(
+                f"Finished creating admin user in database with user ID: "
+                f"{user_db.user_id}"
+            )
+        else:
+            logger.info(
+                "Admin user already created in database. If you want to recreate it, "
+                "then restart all Docker containers."
+            )
+
+        # 4.
         logger.log("CELEBRATE", "Ready to roll! 🚀")
 
         yield
     finally:
-        # 3.
+        # 5.
         logger.info("Closing Redis connection...")
         await app.state.redis.aclose()
         logger.success("Redis connection closed!")

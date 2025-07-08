@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Package Library
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import User
+from mcp_demo.utils.general import hash_password
 
 
 class UserAlreadyExistsError(Exception):
@@ -64,7 +65,7 @@ async def check_if_user_exists(*, asession: AsyncSession, user: User) -> UserDB 
         The user object if it exists in the database, otherwise `None`.
     """
 
-    stmt = select(UserDB).where(UserDB.user_id == user.user_id)
+    stmt = select(UserDB).where(UserDB.username == user.username)
     result = await asession.execute(stmt)
     user_db = result.scalar_one_or_none()
     return user_db
@@ -170,13 +171,15 @@ async def save_user_to_db(*, asession: AsyncSession, user: User) -> UserDB:
 
     if existing_user is not None:
         raise UserAlreadyExistsError(
-            error_msg=f"User ID already exists: {user.user_id}"
+            error_msg=f"User ID already exists: {existing_user.user_id}"
         )
 
     user_db = UserDB(
         created_datetime_utc=datetime.now(timezone.utc),
+        is_active=True,
+        password_hash=hash_password(password=user.password),
         updated_datetime_utc=datetime.now(timezone.utc),
-        user_id=user.user_id,
+        username=user.username,
     )
     asession.add(user_db)
     await asession.commit()
