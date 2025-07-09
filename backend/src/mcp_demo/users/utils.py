@@ -2,6 +2,7 @@
 
 # Standard Library
 from datetime import datetime, timezone
+from typing import Any
 
 # Third Party Library
 from loguru import logger
@@ -236,7 +237,11 @@ async def save_user_to_db(
 
 
 async def update_user_in_db(
-    *, asession: AsyncSession, user: User, user_id: int
+    *,
+    asession: AsyncSession,
+    user: User,
+    user_id: int,
+    **kwargs: Any,
 ) -> UserDB:
     """Update a user in the database.
 
@@ -248,6 +253,8 @@ async def update_user_in_db(
         The user object to update in the database.
     user_id
         The user ID to use for the query.
+    kwargs
+        Additional keyword arguments to update the user object in the database.
 
     Returns
     -------
@@ -259,6 +266,7 @@ async def update_user_in_db(
         updated_datetime_utc=datetime.now(timezone.utc),
         user_id=user_id,
         username=user.username,
+        **kwargs,
     )
     user_db = await asession.merge(user_db)
 

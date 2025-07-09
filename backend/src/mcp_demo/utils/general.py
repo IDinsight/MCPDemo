@@ -21,6 +21,7 @@ from typing import Any
 import yaml
 
 from argon2 import PasswordHasher
+from argon2 import exceptions as argon2_exc
 from argon2.low_level import Type
 from loguru import logger
 
@@ -304,8 +305,14 @@ def remove_json_markdown(*, text: str) -> str:
     return text.strip()
 
 
-def verify_password(*, plain_password: str, hashed_password: str) -> bool:
+def verify_password(
+    *, plain_password: str, hashed_password: str
+) -> tuple[bool, str | None]:
     """Verify a plain text password against a hashed password.
+
+    If the stored hash was generated with weaker parameters, it is transparently
+    re-hashed with the current policy and the new digest is returned; callers can
+    persist it.
 
     Parameters
     ----------
@@ -316,11 +323,19 @@ def verify_password(*, plain_password: str, hashed_password: str) -> bool:
 
     Returns
     -------
-    bool
-        True if the plain password matches the hashed password, False otherwise.
+    tuple[bool, str | None]
+        A tuple containing a boolean indicating whether the password is valid and the
+        hashed password (which may be re-hashed if needed).
     """
 
-    return _PH.verify(hashed_password, plain_password)
+    try:
+        _PH.verify(hashed_password, plain_password)
+    except argon2_exc.VerifyMismatchError:
+        return False, None
+
+    if _PH.check_needs_rehash(hashed_password):
+        hashed_password = hash_password(password=plain_password)
+    return True, hashed_password
 
 
 def yaml_serializer(data: dict[str, Any]) -> str:

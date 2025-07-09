@@ -71,7 +71,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Package Library
 from mcp_demo.config import Settings
 from mcp_demo.users.models import UserDB
-from mcp_demo.users.utils import UserNotFoundError, get_user_by_username
+from mcp_demo.users.schemas import User
+from mcp_demo.users.utils import (
+    UserNotFoundError,
+    get_user_by_username,
+    update_user_in_db,
+)
 from mcp_demo.utils.general import atomic_write, make_dir, verify_password
 
 _JWKS_CACHE: dict[str, Any] | None = None  # In-memory copy
@@ -664,7 +669,22 @@ async def verify_user(
     if not user_db.is_active:
         return None
 
-    if verify_password(plain_password=password, hashed_password=user_db.password_hash):
+    verified, hashed_password = verify_password(
+        plain_password=password, hashed_password=user_db.password_hash
+    )
+
+    if not verified:
+        return None
+
+    if hashed_password == user_db.password_hash:
         return user_db
 
-    return None
+    # Update hashed password.
+    user_db = await update_user_in_db(
+        asession=asession,
+        password_hash=hashed_password,
+        user=User(username=user_db.username),
+        user_id=user_db.user_id,
+    )
+
+    return user_db
