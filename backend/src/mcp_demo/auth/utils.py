@@ -157,10 +157,11 @@ async def get_jwt_token(
 
     The process is as follows:
 
-    1. Grab the most-recent private key and its kid (auto-bootstraps on first run).
-    2. Create a JWT payload with the subject, scopes, issuer, audience, issued at
+    1. Validate the requested scopes against the allowed scopes.
+    2. Grab the most-recent private key and its kid (auto-bootstraps on first run).
+    3. Create a JWT payload with the subject, scopes, issuer, audience, issued at
          time, and expiration time.
-    3. Sign with RS256 and embed the kid so verifiers find the right JWK.
+    4. Sign with RS256 and embed the kid so verifiers find the right JWK.
 
     Parameters
     ----------
@@ -178,14 +179,25 @@ async def get_jwt_token(
     -------
     str
         The generated JWT token as a string.
+
+    Raises
+    ------
+    ValueError
+        If any of the requested scopes are not allowed by the authentication service.
+        This ensures that only valid scopes are included in the JWT token.
     """
 
     # 1.
+    invalid_scopes = set(scopes) - Settings.AUTH_ALLOWED_SCOPES
+    if invalid_scopes:
+        raise ValueError(f"Unrecognised scopes requested: {', '.join(invalid_scopes)}")
+
+    # 2.
     private_key, kid = await get_latest_private_key_and_kid(
         jwks_fn=jwks_fn, passphrase=passphrase
     )
 
-    # 2.
+    # 3.
     now = int(time.time())
     payload = {
         "aud": AUTH_AUDIENCE,
@@ -199,7 +211,7 @@ async def get_jwt_token(
         "typ": "JWT",
     }
 
-    # 3.
+    # 4.
     return cast(
         str,
         jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid}),
@@ -531,6 +543,31 @@ async def rotate_keys(
             raise ValueError(f"Duplicate kid detected after rotation: {kid}")
 
         return kid
+
+
+def sanitize_scopes(*, requested_scopes: list[str] | None) -> list[str]:
+    """Sanitize the requested scopes against the allowed scopes.
+
+    This function ensures that the requested scopes are valid and allowed by the
+    authentication service. If no scopes are requested, it defaults to the "read"
+    scope to ensure that at least one scope is always present.
+
+    Parameters
+    ----------
+    requested_scopes
+        A list of requested scopes. If None, it defaults to an empty list.
+
+    Returns
+    -------
+    list[str]
+        A list of sanitized scopes that are allowed by the authentication service.
+        If no valid scopes are requested, it defaults to ["read"].
+    """
+
+    allowed = Settings.AUTH_ALLOWED_SCOPES
+    requested = set(requested_scopes or [])
+    cleaned = list(allowed & requested) or ["read"]  # Never issue an empty scope set
+    return cleaned
 
 
 def save_jwks(*, jwks: dict[str, Any], jwks_fn: str = AUTH_JWKS_FN) -> None:

@@ -17,6 +17,7 @@ class BackendSettings(BaseSettings):
     """Pydantic settings for backend."""
 
     # Authentication
+    AUTH_ALLOWED_SCOPES: set[str] = {"admin", "read", "write"}
     AUTH_AUDIENCE: str = "MCP_Demo_Server"
     AUTH_FILELOCK_TIMEOUT: int = 2
     AUTH_JWK_ALGORITHM: str = "RS256"

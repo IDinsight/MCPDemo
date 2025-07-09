@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
 from mcp_demo.auth.schemas import TokenResponse
-from mcp_demo.auth.utils import get_jwt_token, load_jwks, verify_user
+from mcp_demo.auth.utils import get_jwt_token, load_jwks, sanitize_scopes, verify_user
 from mcp_demo.config import Settings
 from mcp_demo.utils.database import get_async_session
 
@@ -105,7 +105,7 @@ async def issue_token(
 
     token = await get_jwt_token(
         passphrase=Settings.AUTH_RSA_PASSPHRASE.get_secret_value(),
-        scopes=form.scopes or ["read"],  # Default for FastMCP
+        scopes=sanitize_scopes(requested_scopes=form.scopes),
         sub=form.username,
     )
 
