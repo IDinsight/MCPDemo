@@ -61,7 +61,13 @@ FASTMCP_TRANSPORT = Settings.FASTMCP_TRANSPORT
 
 
 async def _run_client(
-    *, host: str, port: int, server_mount_path: str, transport: str
+    *,
+    host: str,
+    password: str,
+    port: int,
+    server_mount_path: str,
+    transport: str,
+    username: str,
 ) -> None:
     """Main function to demonstrate the MCP client connecting to the server.
 
@@ -69,21 +75,27 @@ async def _run_client(
     ----------
     host
         The host address for the MCP client.
+    password
+        The password for the MCP client.
     port
         The port number for the MCP client.
     server_mount_path
         The mount path for the MCP server.
     transport
         The transport type for the MCP client.
+    username
+        The username for the MCP client.
     """
 
     client: Client = Client(
         log_handler=log_handler,
         transport=get_mcp_config_docker(  # type: ignore
             host=host,
+            password=password,
             port=port,
             server_mount_path=server_mount_path,
             transport=transport,
+            username=username,
         ),
     )
     async with client:
@@ -196,6 +208,12 @@ def main(
         help="The host address for the MCP client.",
         show_default=True,
     ),
+    password: str = typer.Option(
+        "password",
+        "--password",
+        help="The password for the MCP client.",
+        show_default=True,
+    ),
     port: int = typer.Option(
         FASTMCP_PORT,
         "--port",
@@ -215,6 +233,12 @@ def main(
         help="The transport type for the MCP client.",
         show_choices=True,
     ),
+    username: str = typer.Option(
+        "admin",
+        "--username",
+        help="The username for the MCP client.",
+        show_default=True,
+    ),
 ) -> None:
     """Wrapper function for running the MCP client.
 
@@ -222,20 +246,26 @@ def main(
     ----------
     host
         The host address for the MCP client.
+    password
+        The password for the MCP client.
     port
         The port number for the MCP client.
     server_mount_path
         The mount path for the MCP server.
     transport
         The transport type for the MCP client.
+    username
+        The username for the MCP client.
     """
 
     asyncio.run(
         _run_client(
             host=host,
+            password=password,
             port=port,
             server_mount_path=server_mount_path,
             transport=transport,
+            username=username,
         )
     )
 
