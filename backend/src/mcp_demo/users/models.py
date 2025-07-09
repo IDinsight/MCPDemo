@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 # Third Party Library
-from sqlalchemy import Boolean, DateTime, Integer, LargeBinary, String
+from sqlalchemy import ARRAY, Boolean, DateTime, Integer, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 # Package Library
@@ -24,6 +24,7 @@ class UserDB(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     password_hash: Mapped[bytes] = mapped_column(LargeBinary(), nullable=False)
+    recovery_codes: Mapped[list] = mapped_column(ARRAY(String), nullable=True)
     updated_datetime_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
