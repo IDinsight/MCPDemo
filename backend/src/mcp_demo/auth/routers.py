@@ -17,19 +17,18 @@ This implements a lightweight OAuth2 “password grant” style contract, withou
 flows like refresh or consent screens — ideal for service-to-service setups.
 """
 
-# Standard Library
-import os
-
-from pathlib import Path
-from typing import Any
-
 # Third Party Library
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
+from fastapi.exceptions import HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
 from mcp_demo.auth.schemas import TokenResponse
 from mcp_demo.auth.utils import get_jwt_token, load_jwks, verify_user
 from mcp_demo.config import Settings
+from mcp_demo.utils.database import get_async_session
 
 TAG_METADATA = {"description": "Handles authentication", "name": "Authentication"}
 router = APIRouter(prefix="/auth", tags=[TAG_METADATA["name"]])
@@ -44,7 +43,7 @@ router = APIRouter(prefix="/auth", tags=[TAG_METADATA["name"]])
     include_in_schema=False,
     summary="JWKS Endpoint",
 )
-async def get_jwks() -> dict[str, Any]:
+async def get_jwks() -> JSONResponse:
     """Publish the JSON-Web-Key-Set used by the token-issuer. FastMCP’s
     `BearerAuthProvider` will automatically download and cache this URI.
 
@@ -54,11 +53,11 @@ async def get_jwks() -> dict[str, Any]:
 
     Returns
     -------
-    \n\tdict[str, Any]
-    \t\tThe JWKS containing the public keys used to verify JWT tokens.
+    JSONResponse
+        The JWKS containing the public keys used to verify JWT tokens.
     """
 
-    return await load_jwks()
+    return JSONResponse(await load_jwks())
 
 
 @router.post(
@@ -72,32 +71,43 @@ async def get_jwks() -> dict[str, Any]:
     response_model=TokenResponse,
     summary="Issue Bearer Token",
 )
-async def issue_token(user: dict[str, Any] = Depends(verify_user)) -> TokenResponse:
+async def issue_token(
+    asession: AsyncSession = Depends(get_async_session),
+    form: OAuth2PasswordRequestForm = Depends(),
+) -> TokenResponse:
     """Issue a JWT token for the authenticated user.
 
     Parameters
     ----------
-    \n\tuser
-    \t\tThe authenticated user. This is obtained from the `verify_user` dependency,
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    form
+        The OAuth2 password request form.
 
     Returns
     -------
-    \n\tTokenResponse
-    \t\tThe token response containing the access token, expiration time, and token type.
+    TokenResponse
+        The token response containing the access token, expiration time, and token type.
+
+    Raises
+    ------
+    HTTPException
+        If the user credentials are invalid or the user does not exist.
     """
 
-    token = await get_jwt_token(
-        passphrase=Settings.AUTH_USER_PASSPHRASE.get_secret_value(),
-        scopes=user["scopes"],
-        sub=user["sub"],
+    user_db = await verify_user(
+        asession=asession, password=form.password, username=form.username
     )
+    if user_db is None:
+        raise HTTPException(
+            detail="Bad credentials", status_code=status.HTTP_401_UNAUTHORIZED
+        )
 
-    # Write the token to disk for usage in other shells, applications, etc. DO NOT DO
-    # THIS IN PRODUCTION! This is just for demonstration purposes.
-    token_fp = Path("/tmp") / "mcp_demo_token.txt"
-    with token_fp.open("w") as f:
-        f.write(token)
-    os.chmod(token_fp, 0o600)
+    token = await get_jwt_token(
+        passphrase=Settings.AUTH_RSA_PASSPHRASE.get_secret_value(),
+        scopes=form.scopes or ["read"],  # Default for FastMCP
+        sub=form.username,
+    )
 
     return TokenResponse(
         access_token=token, expires_in=Settings.AUTH_TOKEN_TTL, token_type="bearer"
