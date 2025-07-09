@@ -18,10 +18,21 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 # Third Party Library
-import bcrypt
 import yaml
 
+from argon2 import PasswordHasher
+from argon2.low_level import Type
 from loguru import logger
+
+# Tuned for 64 MiB & 2 rounds ≈ 120 ms on AWS t4g.medium.
+_PH = PasswordHasher(
+    hash_len=32,
+    memory_cost=64 * 1024,
+    parallelism=2,
+    salt_len=16,
+    time_cost=2,
+    type=Type.ID,
+)
 
 
 def atomic_write(
@@ -158,8 +169,8 @@ def escape_angle_brackets(x: Any) -> str:
     return recurse_replace(r"\>", ">", recurse_replace(r"\<", "<", str(x)))
 
 
-def hash_password(*, password: str) -> bytes:
-    """Hash a password using bcrypt.
+def hash_password(*, password: str) -> str:
+    """Hash a password using Argon2.
 
     Parameters
     ----------
@@ -168,14 +179,11 @@ def hash_password(*, password: str) -> bytes:
 
     Returns
     -------
-    bytes
+    str
         The hashed password.
     """
 
-    pwd_bytes = password.encode("utf-8")
-    salt = bcrypt.gensalt()
-    hashed_password = bcrypt.hashpw(password=pwd_bytes, salt=salt)
-    return hashed_password
+    return _PH.hash(password)
 
 
 def generate_random_string(*, size: int) -> str:
@@ -296,15 +304,11 @@ def remove_json_markdown(*, text: str) -> str:
     return text.strip()
 
 
-def verify_password(
-    *, encoding: str = "utf-8", plain_password: str, hashed_password: bytes
-) -> bool:
+def verify_password(*, plain_password: str, hashed_password: str) -> bool:
     """Verify a plain text password against a hashed password.
 
     Parameters
     ----------
-    encoding
-        The encoding to use for the plain password.
     plain_password
         The plain text password to verify.
     hashed_password
@@ -316,8 +320,7 @@ def verify_password(
         True if the plain password matches the hashed password, False otherwise.
     """
 
-    password_byte_enc = plain_password.encode(encoding)
-    return bcrypt.checkpw(hashed_password=hashed_password, password=password_byte_enc)
+    return _PH.verify(hashed_password, plain_password)
 
 
 def yaml_serializer(data: dict[str, Any]) -> str:

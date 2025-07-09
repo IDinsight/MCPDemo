@@ -81,7 +81,7 @@ PATHS_PROJECT_DIR = os.getenv("PATHS_PROJECT_DIR", None)
 assert PATHS_PROJECT_DIR is not None
 _SECRETS_DIR = Path(PATHS_PROJECT_DIR) / "secrets"
 make_dir(_SECRETS_DIR, mode=0o700)
-_LOCK = FileLock(str(_SECRETS_DIR / ".rotate.lock"), timeout=0)  # Non-blocking lock
+_LOCK = FileLock(str(_SECRETS_DIR / ".rotate.lock"), timeout=2)
 
 AUTH_AUDIENCE = Settings.AUTH_AUDIENCE
 AUTH_FILELOCK_TIMEOUT = Settings.AUTH_FILELOCK_TIMEOUT
@@ -188,7 +188,6 @@ async def get_jwt_token(
     # 2.
     now = int(time.time())
     payload = {
-        "alg": AUTH_JWK_ALGORITHM,
         "aud": AUTH_AUDIENCE,
         "exp": now + AUTH_TOKEN_TTL,
         "iat": now,
@@ -628,9 +627,7 @@ async def verify_user(
     if not user_db.is_active:
         return None
 
-    if verify_password(
-        encoding="utf-8", plain_password=password, hashed_password=user_db.password_hash
-    ):
+    if verify_password(plain_password=password, hashed_password=user_db.password_hash):
         return user_db
 
     return None
