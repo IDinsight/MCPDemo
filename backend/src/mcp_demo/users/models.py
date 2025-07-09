@@ -24,7 +24,7 @@ class UserDB(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     password_hash: Mapped[str] = mapped_column(String(), nullable=False)
-    recovery_codes: Mapped[list] = mapped_column(ARRAY(String), nullable=True)
+    recovery_codes_hash: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=True)
     updated_datetime_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -40,4 +40,4 @@ class UserDB(Base):
             A string representation of the `UserDB` class.
         """
 
-        return f"User ID: {self.user_id}"
+        return f"<Username '{self.username}' mapped to user ID {self.user_id}>"

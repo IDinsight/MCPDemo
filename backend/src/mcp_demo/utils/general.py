@@ -170,21 +170,21 @@ def escape_angle_brackets(x: Any) -> str:
     return recurse_replace(r"\>", ">", recurse_replace(r"\<", "<", str(x)))
 
 
-def hash_password(*, password: str) -> str:
-    """Hash a password using Argon2.
+def generate_hash(*, text: str) -> str:
+    """Hash text using Argon2.
 
     Parameters
     ----------
-    password
-        The password to hash.
+    text
+        The text to hash.
 
     Returns
     -------
     str
-        The hashed password.
+        The hashed text.
     """
 
-    return _PH.hash(password)
+    return _PH.hash(text)
 
 
 def generate_random_string(*, size: int) -> str:
@@ -217,14 +217,16 @@ def generate_recovery_codes(*, code_length: int = 20, num_codes: int = 5) -> lis
     Returns
     -------
     list[str]
-        A list of recovery codes.
+        A list of recovery codes, each of length `code_length`.
     """
 
     chars = string.ascii_letters + string.digits
-    return [
+    recovery_codes = [
         "".join(secrets.choice(chars) for _ in range(code_length))
         for _ in range(num_codes)
     ]
+
+    return recovery_codes
 
 
 def make_dir(dir_: str | Path, mode: int = 0o777, verbose: bool = True) -> None:
@@ -334,7 +336,7 @@ def verify_password(
         return False, None
 
     if _PH.check_needs_rehash(hashed_password):
-        hashed_password = hash_password(password=plain_password)
+        hashed_password = generate_hash(text=plain_password)
     return True, hashed_password
 
 

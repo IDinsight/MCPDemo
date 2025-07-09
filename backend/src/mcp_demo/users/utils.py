@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Package Library
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import User, UserCreateWithPassword
-from mcp_demo.utils.general import generate_random_string, hash_password
+from mcp_demo.utils.general import generate_hash, generate_random_string
 
 
 class UserAlreadyExistsError(Exception):
@@ -183,7 +183,7 @@ async def get_user_by_username(*, asession: AsyncSession, username: str) -> User
 async def save_user_to_db(
     *,
     asession: AsyncSession,
-    recovery_codes: list[str] | None = None,
+    recovery_codes: list[str],
     user: User | UserCreateWithPassword,
 ) -> UserDB:
     """Save a user in the database.
@@ -224,8 +224,10 @@ async def save_user_to_db(
     user_db = UserDB(
         created_datetime_utc=datetime.now(timezone.utc),
         is_active=True,
-        password_hash=hash_password(password=password),
-        recovery_codes=recovery_codes,
+        password_hash=generate_hash(text=password),
+        recovery_codes_hash=[
+            generate_hash(text=recovery_code) for recovery_code in recovery_codes
+        ],
         updated_datetime_utc=datetime.now(timezone.utc),
         username=user.username,
     )
