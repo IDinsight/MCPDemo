@@ -50,6 +50,8 @@ up-pgvector: ## Set up pg-vector container
 		-p 5432:5432 \
 		-v pgvector_data:/var/lib/postgresql/data \
 		-d $(DOCKER_PG_VECTOR_IMAGE)
+	@sleep 2
+	@echo "$(GREEN)Running database migrations...$(RESET)"
 	@set -a && source "$(CURDIR)/backend/.env" && set +a && cd backend && python -m alembic upgrade head
 
 up-redis: ## Set up Redis container
