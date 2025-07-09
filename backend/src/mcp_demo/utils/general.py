@@ -8,7 +8,10 @@ instead.
 
 # Standard Library
 import os
+import random
 import re
+import secrets
+import string
 
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -173,6 +176,46 @@ def hash_password(*, password: str) -> bytes:
     salt = bcrypt.gensalt()
     hashed_password = bcrypt.hashpw(password=pwd_bytes, salt=salt)
     return hashed_password
+
+
+def generate_random_string(*, size: int) -> str:
+    """Generate a random string of fixed length.
+
+    Parameters
+    ----------
+    size
+        The size of the random string to generate.
+
+    Returns
+    -------
+    str
+        The generated random string.
+    """
+
+    return "".join(random.choices(string.ascii_letters + string.digits, k=size))
+
+
+def generate_recovery_codes(*, code_length: int = 20, num_codes: int = 5) -> list[str]:
+    """Generate recovery codes for a user.
+
+    Parameters
+    ----------
+    code_length
+        The length of each recovery code.
+    num_codes
+        The number of recovery codes to generate.
+
+    Returns
+    -------
+    list[str]
+        A list of recovery codes.
+    """
+
+    chars = string.ascii_letters + string.digits
+    return [
+        "".join(secrets.choice(chars) for _ in range(code_length))
+        for _ in range(num_codes)
+    ]
 
 
 def make_dir(dir_: str | Path, mode: int = 0o777, verbose: bool = True) -> None:
