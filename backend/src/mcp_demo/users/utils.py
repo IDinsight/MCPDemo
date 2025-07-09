@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
 from mcp_demo.users.models import UserDB
-from mcp_demo.users.schemas import User
-from mcp_demo.utils.general import hash_password
+from mcp_demo.users.schemas import User, UserCreateWithPassword
+from mcp_demo.utils.general import generate_random_string, hash_password
 
 
 class UserAlreadyExistsError(Exception):
@@ -146,13 +146,53 @@ async def get_user_by_id(*, asession: AsyncSession, user_id: int) -> UserDB:
         ) from err
 
 
-async def save_user_to_db(*, asession: AsyncSession, user: User) -> UserDB:
+async def get_user_by_username(*, asession: AsyncSession, username: str) -> UserDB:
+    """Retrieve a user by username.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    username
+        The username to use for the query.
+
+    Returns
+    -------
+    UserDB
+        The user object retrieved from the database.
+
+    Raises
+    ------
+    UserNotFoundError
+        If the user with the specified username does not exist.
+    """
+
+    stmt = select(UserDB).where(UserDB.username == username)
+    result = await asession.execute(stmt)
+
+    try:
+        user_db = result.scalar_one()
+        return user_db
+    except NoResultFound as err:
+        raise UserNotFoundError(
+            error_msg=f"User with username {username} does not exist."
+        ) from err
+
+
+async def save_user_to_db(
+    *,
+    asession: AsyncSession,
+    recovery_codes: list[str] | None = None,
+    user: User | UserCreateWithPassword,
+) -> UserDB:
     """Save a user in the database.
 
     Parameters
     ----------
     asession
         The SQLAlchemy async session to use for all database connections.
+    recovery_codes
+        The recovery codes for the user account recovery.
     user
         The user object to save in the database.
 
@@ -174,10 +214,17 @@ async def save_user_to_db(*, asession: AsyncSession, user: User) -> UserDB:
             error_msg=f"User ID already exists: {existing_user.user_id}"
         )
 
+    password = (
+        user.password
+        if isinstance(user, UserCreateWithPassword)
+        else generate_random_string(size=12)
+    )
+
     user_db = UserDB(
         created_datetime_utc=datetime.now(timezone.utc),
         is_active=True,
-        password_hash=hash_password(password=user.password),
+        password_hash=hash_password(password=password),
+        recovery_codes=recovery_codes,
         updated_datetime_utc=datetime.now(timezone.utc),
         username=user.username,
     )
@@ -188,13 +235,17 @@ async def save_user_to_db(*, asession: AsyncSession, user: User) -> UserDB:
     return user_db
 
 
-async def update_user_in_db(*, asession: AsyncSession, user_id: int) -> UserDB:
+async def update_user_in_db(
+    *, asession: AsyncSession, user: User, user_id: int
+) -> UserDB:
     """Update a user in the database.
 
     Parameters
     ----------
     asession
         The SQLAlchemy async session to use for all database connections.
+    user
+        The user object to update in the database.
     user_id
         The user ID to use for the query.
 
@@ -204,9 +255,12 @@ async def update_user_in_db(*, asession: AsyncSession, user_id: int) -> UserDB:
         The user object saved in the database after update.
     """
 
-    user_db = await get_user_by_id(asession=asession, user_id=user_id)
-
-    user_db.updated_datetime_utc = datetime.now(timezone.utc)
+    user_db = UserDB(
+        updated_datetime_utc=datetime.now(timezone.utc),
+        user_id=user_id,
+        username=user.username,
+    )
+    user_db = await asession.merge(user_db)
 
     await asession.commit()
     await asession.refresh(user_db)
