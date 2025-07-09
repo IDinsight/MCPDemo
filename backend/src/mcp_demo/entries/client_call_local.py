@@ -4,11 +4,7 @@ locally.
 From the backend directory of this project, this entry point can be invoked from the
 command line via:
 
-python -m src.mcp_demo.entries.client_call_local
-
-or
-
-python src/mcp_demo/entries/client_call_local.py
+python src/mcp_demo/entries/client_call_local.py --username=your_username --password=your_password
 """
 
 # pylint: disable=R0915

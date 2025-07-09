@@ -1,11 +1,17 @@
 # PATH variables must be set in .env files.
 services:
-  # Start api service first so mcp service doesn't 404 when it tries to fetch jwks.json.
-  api:
+  api:  # Start api service first so mcp service doesn't 404 when it tries to fetch jwks.json.
     build:
       context: ${PATHS_PROJECT_DIR}
       dockerfile: backend/Dockerfile.api
+    command: >
+      /bin/sh -c "
+      python -m alembic upgrade head &&
+      python src/mcp_demo/entries/fastapi_app.py"
     container_name: api-dev
+    depends_on:
+      db:
+        condition: service_healthy
     env_file:
       - ${PATHS_PROJECT_DIR}/.env
       - ${PATHS_PROJECT_DIR}/backend/.env
@@ -13,10 +19,9 @@ services:
       # Re-use the same values that the FastAPI app expects.
       - AUTH_AUDIENCE=${AUTH_AUDIENCE}
       - AUTH_JWKS_FN=${AUTH_JWKS_FN}
+      - AUTH_RSA_PASSPHRASE=${AUTH_RSA_PASSPHRASE}
       - AUTH_TOKEN_ISSUER=https://tokens.local
       - AUTH_TOKEN_TTL=${AUTH_TOKEN_TTL}
-      - AUTH_USER_NAME=${AUTH_USER_NAME}
-      - AUTH_USER_PASSPHRASE=${AUTH_USER_PASSPHRASE}
       - LITELLM_ENDPOINT=http://litellm-proxy:4000
       - PATHS_PROJECT_DIR=/usr
       - PATHS_SECRETS_DIR=/usr/secrets
@@ -76,6 +81,10 @@ services:
     build:
       context: ${PATHS_PROJECT_DIR}
       dockerfile: backend/Dockerfile.mcp
+    command: >
+      /bin/sh -c "
+      python -m alembic upgrade head &&
+      python src/mcp_demo/entries/mcp_server_main.py"
     container_name: mcp_demo-dev
     depends_on:
       api:
@@ -89,10 +98,9 @@ services:
       - AUTH_AUDIENCE=${AUTH_AUDIENCE}
       - AUTH_JWKS_FN=${AUTH_JWKS_FN}
       - AUTH_JWKS_URI=http://api:8000/auth/jwks.json  # Point JWKS URI at the service name (i.e., "api")
+      - AUTH_RSA_PASSPHRASE=${AUTH_RSA_PASSPHRASE}
       - AUTH_TOKEN_ISSUER=https://tokens.local
       - AUTH_TOKEN_TTL=${AUTH_TOKEN_TTL}
-      - AUTH_USER_NAME=${AUTH_USER_NAME}
-      - AUTH_USER_PASSPHRASE=${AUTH_USER_PASSPHRASE}
       - CHAT_ENV=dev
       - LITELLM_ENDPOINT=http://litellm-proxy:4000
       - PATHS_PROJECT_DIR=/usr
