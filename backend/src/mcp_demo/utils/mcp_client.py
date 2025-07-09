@@ -13,8 +13,15 @@ from loguru import logger
 from mcp_demo.config import Settings
 
 
-def get_bearer_auth_token() -> str:
+def get_bearer_auth_token(*, password: str, username: str) -> str:
     """Get the bearer authentication token for the client.
+
+    Parameters
+    ----------
+    password
+        The password for the MCP client authentication.
+    username
+        The username for the MCP client authentication.
 
     Returns
     -------
@@ -31,9 +38,9 @@ def get_bearer_auth_token() -> str:
 
     url = "http://0.0.0.0:8000/auth/token"
     payload = {
-        "password": Settings.AUTH_USER_PASSPHRASE.get_secret_value(),
+        "password": password,
         "scope": "read",
-        "username": Settings.AUTH_USER_NAME,
+        "username": username,
     }
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     response = requests.post(url, data=payload, headers=headers, timeout=60)
@@ -53,9 +60,11 @@ def get_bearer_auth_token() -> str:
 def get_mcp_config_docker(
     *,
     host: str,
+    password: str,
     port: int,
     server_mount_path: str,
     transport: str,
+    username: str,
 ) -> MCPConfig:
     """Get the docker MCP client configuration.
 
@@ -63,12 +72,16 @@ def get_mcp_config_docker(
     ----------
     host
         The host address for the MCP client.
+    password
+        The password for the MCP client authentication.
     port
         The port number for the MCP client.
     server_mount_path
         The mount path for the MCP server.
     transport
         The transport type for the MCP client.
+    username
+        The username for the MCP client authentication.
 
     Returns
     -------
@@ -82,7 +95,7 @@ def get_mcp_config_docker(
         If the access token cannot be retrieved from the server.
     """
 
-    access_token = get_bearer_auth_token()
+    access_token = get_bearer_auth_token(password=password, username=username)
     server_config = {
         "main_server": RemoteMCPServer(
             auth=BearerAuth(token=access_token),
@@ -99,9 +112,11 @@ def get_mcp_config_local(
     *,
     host: str,
     include_external_servers: bool = False,
+    password: str,
     port: int,
     server_mount_path: str,
     transport: str,
+    username: str,
 ) -> MCPConfig:
     """Get the local MCP client configuration.
 
@@ -111,12 +126,16 @@ def get_mcp_config_local(
         The host address for the MCP client.
     include_external_servers
         If True, include external MCP servers in the configuration.
+    password
+        The password for the MCP client authentication.
     port
         The port number for the MCP client.
     server_mount_path
         The mount path for the MCP server.
     transport
         The transport type for the MCP client.
+    username
+        The username for the MCP client authentication.
 
     Returns
     -------
@@ -125,7 +144,7 @@ def get_mcp_config_local(
         and authentication details.
     """
 
-    access_token = get_bearer_auth_token()
+    access_token = get_bearer_auth_token(password=password, username=username)
     server_config = {
         "main_server": RemoteMCPServer(
             auth=BearerAuth(token=access_token),
