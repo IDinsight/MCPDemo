@@ -8,10 +8,23 @@ from pydantic import BaseModel, ConfigDict
 class User(BaseModel):
     """Pydantic model for users."""
 
-    password: str
     username: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class UserCreateWithRecoveryCodes(User):
+    """Pydantic model for user creation with recovery codes for user account
+    recovery.
+    """
+
+    recovery_codes: list[str]
+
+
+class UserCreateWithPassword(User):
+    """Pydantic model for user creation with a password."""
+
+    password: str
 
 
 class UserDeleteResponse(BaseModel):
