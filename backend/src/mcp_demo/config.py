@@ -24,13 +24,12 @@ class BackendSettings(BaseSettings):
     AUTH_JWKS_URI: str = "http://0.0.0.0:8000/auth/jwks.json"
     AUTH_ROTATION_KEEP_LAST_N: int = 2
     AUTH_RSA_KEY_SIZE: int = Field(3072, ge=1024)
+    AUTH_RSA_PASSPHRASE: SecretStr = Field(
+        ..., description="Passphrase protecting the JWT signing key."
+    )
     AUTH_RSA_PUBLIC_EXPONENT: int = Field(65537, ge=3, le=65537)
     AUTH_TOKEN_ISSUER: str = "https://tokens.local"
     AUTH_TOKEN_TTL: int = 900  # 15 minutes
-    AUTH_USER_NAME: str = Field("admin", description="Username for the MCP Demo user.")
-    AUTH_USER_PASSPHRASE: SecretStr = Field(
-        ..., description="Passphrase for the MCP Demo user."
-    )
 
     # Chat
     CHAT_ENV: str = "dev"
@@ -75,7 +74,6 @@ class BackendSettings(BaseSettings):
     POSTGRES_ASYNC_API: str = Field("asyncpg", validation_alias="POSTGRES_ASYNC_API")
     POSTGRES_DB: str = Field("mcp_demo", validation_alias="POSTGRES_DB")
     POSTGRES_DB_POOL_SIZE: int = Field(10, validation_alias="POSTGRES_DB_POOL_SIZE")
-    POSTGRES_DB_TYPE: str = Field("postgresql", validation_alias="POSTGRES_DB_TYPE")
     POSTGRES_HOST: str = Field("localhost", validation_alias="POSTGRES_HOST")
     POSTGRES_PASSWORD: str = Field("postgres", validation_alias="POSTGRES_PASSWORD")
     POSTGRES_PORT: str = Field("5432", validation_alias="POSTGRES_PORT")
@@ -87,7 +85,6 @@ class BackendSettings(BaseSettings):
 
     # Redis
     REDIS_CACHE_PREFIX_CHAT: str = os.getenv("REDIS_CACHE_PREFIX_CHAT", "chat_sessions")
-    REDIS_CACHE_PREFIX_USER_DB_INITIALIZED: str = "USER_DB_INITIALIZED"
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
 
     # Sentry
