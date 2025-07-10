@@ -95,6 +95,7 @@ AUTH_RSA_PUBLIC_EXPONENT = Settings.AUTH_RSA_PUBLIC_EXPONENT
 AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
 AUTH_TOKEN_TTL = Settings.AUTH_TOKEN_TTL
 REDIS_CACHE_PREFIX_JTI = Settings.REDIS_CACHE_PREFIX_JTI
+REDIS_CACHE_PREFIX_JWKS_CURRENT = Settings.REDIS_CACHE_PREFIX_JWKS_CURRENT
 
 
 def _set_cache(*, mtime: float | None, new_jwks: dict[str, Any]) -> None:
@@ -404,6 +405,62 @@ async def load_jwks(*, jwks_fn: str = AUTH_JWKS_FN) -> dict[str, Any]:
         return _JWKS_CACHE
 
 
+async def load_jwks_from_redis(
+    *, force_refresh: bool = False, redis_client: aioredis.Redis
+) -> dict[str, Any]:
+    """Return the JSON Web Key Set (JWKS), cached in-process and backed by Redis.
+
+    Parameters
+    ----------
+    force_refresh
+        Skip the in-memory cache and fetch from Redis again (rarely needed).
+    redis_client
+        An instance of `aioredis.Redis` used to fetch the JWKS.
+
+    Returns
+    -------
+    dict[str, Any]
+        The JWKS containing the public keys used to verify incoming JWTs.
+
+    Raises
+    ------
+    RuntimeError
+        If the JWKS is not found in Redis and the initialisation fails, indicating a
+        configuration error.
+    """
+
+    if _JWKS_CACHE is not None and not force_refresh:
+        return _JWKS_CACHE  # Serve the in-process copy
+
+    raw = await redis_client.get(REDIS_CACHE_PREFIX_JWKS_CURRENT)
+
+    if not raw:
+        async with process_lock():
+            raw = await redis_client.get(REDIS_CACHE_PREFIX_JWKS_CURRENT)
+        if not raw:
+            await rotate_keys_with_redis(
+                keep_last_n=AUTH_ROTATION_KEEP_LAST_N,
+                key_size=AUTH_RSA_KEY_SIZE,
+                passphrase=Settings.AUTH_RSA_PASSPHRASE.get_secret_value(),
+                redis_client=redis_client,
+            )
+            raw = await redis_client.get(REDIS_CACHE_PREFIX_JWKS_CURRENT)
+            if not raw:  # Still missing --> configuration error
+                raise RuntimeError(
+                    f"JWKS initialisation failed. "
+                    f"'{REDIS_CACHE_PREFIX_JWKS_CURRENT}' not set in Redis."
+                )
+
+    jwks = json.loads(raw)
+
+    # Atomic swap into the per-process cache.
+    _set_cache(mtime=None, new_jwks=jwks)
+
+    assert isinstance(_JWKS_CACHE, dict) and _JWKS_CACHE
+
+    return _JWKS_CACHE
+
+
 def load_private_key(
     *, passphrase: str, private_key_fp: str | Path
 ) -> rsa.RSAPrivateKey:
@@ -612,6 +669,95 @@ async def rotate_keys(
 
         if kid in {key["kid"] for key in jwks["keys"][1:]}:
             raise ValueError(f"Duplicate kid detected after rotation: {kid}")
+
+        return kid
+
+
+async def rotate_keys_with_redis(
+    *,
+    keep_last_n: int = AUTH_ROTATION_KEEP_LAST_N,
+    key_size: int = AUTH_RSA_KEY_SIZE,
+    passphrase: str,
+    redis_client: aioredis.Redis,
+) -> str:
+    """Generate a new RSA key-pair and push the updated JWKS to Redis instead of
+    writing jwks.json to disk.
+
+    The process is as follows:
+
+    1. Generate a new kid (key ID) for the new key pair.
+    2. Generate a new RSA key pair (private and public keys).
+    3. Save the private and public keys to a PEM file, optionally encrypted with a
+        passphrase.
+    4. Load the existing JWKS (JSON Web Key Set) from Redis (or start empty).
+    5. Insert the fresh public key at the head of the list.
+    6. Prune the JWKS to keep only the most recent `keep_last_n` public keys.
+    7. Save the whole JWKS back to Redis in one atomic SET operation.
+    8. Refresh the in-memory cache for this process.
+
+    Parameters
+    ----------
+    keep_last_n
+        The number of most recent keys to keep in the JWKS. Older keys will be deleted.
+    key_size
+        The size of the RSA key in bits. Use 2048 for most applications, or 4096 for
+        longer-term certificates.
+    passphrase
+        Passphrase to encrypt the private key.
+    redis_client
+        An instance of `aioredis.Redis` used to store the JWKS.
+
+    Returns
+    -------
+    str
+        The key ID (kid) of the newly generated key pair, which can be used to sign
+        JWTs.
+    """
+
+    async with process_lock():
+        # 1.
+        kid = token_hex(8)  # 16-char random key ID
+
+        # 2.
+        private_key, public_key = await asyncio.to_thread(
+            generate_rsa_keypair, key_size=key_size
+        )
+
+        # 3.
+        await asyncio.to_thread(
+            save_keypair,
+            passphrase=passphrase,
+            private_key=private_key,
+            private_key_fp=_SECRETS_DIR / f"private_{kid}.pem",
+            public_key=public_key,
+            public_key_fp=_SECRETS_DIR / f"public_{kid}.pem",
+        )
+
+        # 4.
+        raw = await redis_client.get(REDIS_CACHE_PREFIX_JWKS_CURRENT)
+        if raw:
+            try:
+                jwks = json.loads(raw)
+            except json.JSONDecodeError:
+                jwks = {"keys": []}
+        else:
+            jwks = {"keys": []}
+
+        # 5.
+        new_jwk = jwk_from_public_key(kid=kid, public_key=public_key)
+
+        # 6.
+        jwks["keys"] = [new_jwk, *[k for k in jwks["keys"] if k["kid"] != kid]][
+            :keep_last_n
+        ]
+
+        # 7.
+        await redis_client.set(
+            REDIS_CACHE_PREFIX_JWKS_CURRENT, json.dumps(jwks, separators=(",", ":"))
+        )
+
+        # 8.
+        _set_cache(mtime=None, new_jwks=jwks)
 
         return kid
 
