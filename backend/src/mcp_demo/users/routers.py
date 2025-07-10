@@ -100,7 +100,7 @@ async def login(
     if await is_locked_out(ip=ip, redis_client=redis_client, user=username):
         raise HTTPException(
             detail="Too many failed login attempts. Try again later.",
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
     user_db = await verify_user(
@@ -109,7 +109,8 @@ async def login(
     if user_db is None:
         await record_failed_login(ip=ip, redis_client=redis_client, user=username)
         raise HTTPException(
-            detail="Bad credentials", status_code=status.HTTP_401_UNAUTHORIZED
+            detail="Too many failed login attempts. Try again later.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
     await reset_failed_login(ip=ip, redis_client=redis_client, user=username)
@@ -235,7 +236,7 @@ async def delete_user(
     """
 
     # 1.
-    if calling_user_db.user_id != user_id or "admin" not in calling_user_db.scopes:
+    if calling_user_db.user_id != user_id and "admin" not in calling_user_db.scopes:
         raise HTTPException(
             detail=f"User ID not found: {user_id}.",
             status_code=status.HTTP_404_NOT_FOUND,
