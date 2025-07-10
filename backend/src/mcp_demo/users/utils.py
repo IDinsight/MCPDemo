@@ -2,18 +2,39 @@
 
 # Standard Library
 from datetime import datetime, timezone
-from typing import Any
+from typing import Annotated, Any
 
 # Third Party Library
+import jwt
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, SecurityScopes
+from jose import JWTError, jwk
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
+from mcp_demo.auth.utils import load_jwks
+from mcp_demo.config import Settings
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import User, UserCreateWithPassword
-from mcp_demo.utils.general import generate_hash, generate_random_string
+from mcp_demo.utils.database import get_async_session_managed
+from mcp_demo.utils.general import (
+    generate_hash,
+    generate_random_string,
+    verify_password,
+)
+
+AUTH_AUDIENCE = Settings.AUTH_AUDIENCE
+AUTH_JWK_ALGORITHM = Settings.AUTH_JWK_ALGORITHM
+AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
+
+oauth2_scheme = OAuth2PasswordBearer(
+    scopes={"user": "Regular user", "admin": "Site administrator"},
+    tokenUrl="/user/token",
+)
 
 
 class UserAlreadyExistsError(Exception):
@@ -112,6 +133,85 @@ async def delete_user_from_db(*, asession: AsyncSession, user_id: int) -> None:
 
     await asession.delete(user_db)
     await asession.commit()
+
+
+async def get_current_user(
+    token: Annotated[str, Depends(oauth2_scheme)],
+    security_scopes: SecurityScopes = SecurityScopes(),
+) -> UserDB:
+    """Get the current user from the JWT token.
+
+    This function decodes the JWT token, verifies its signature using the public key
+    from the JWKS, and checks if the user exists in the database. It also verifies that
+    the token has the required scopes for the requested operation.
+
+    Parameters
+    ----------
+    token
+        The JWT token to decode and verify.
+    security_scopes
+        The security scopes required for the operation, used to check if the token
+        has the necessary permissions.
+
+    Returns
+    -------
+    UserDB
+        The user database object representing the authenticated user.
+
+    Raises
+    ------
+    HTTPException
+        If the token is invalid, expired, or does not have the required scopes. This
+        exception is raised with a 401 Unauthorized status code if the token cannot be
+        validated, or a 403 Forbidden status code if the token lacks sufficient
+        permissions.
+    """
+
+    credentials_exception = HTTPException(
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+        status_code=status.HTTP_401_UNAUTHORIZED,
+    )
+
+    try:
+        header = jwt.get_unverified_header(token)
+        kid = header.get("kid")
+        if not kid:
+            raise credentials_exception
+        last_jwks = await load_jwks()
+        key = next(k for k in last_jwks["keys"] if k["kid"] == kid)
+        if not key:
+            raise credentials_exception
+        public_key = jwk.construct(key).to_pem().decode()
+        payload = jwt.decode(
+            token,
+            public_key,
+            algorithms=[AUTH_JWK_ALGORITHM],
+            audience=AUTH_AUDIENCE,
+            issuer=AUTH_TOKEN_ISSUER,
+            options={"require": ["exp", "sub"]},
+        )
+    except (StopIteration, JWTError) as exc:
+        raise credentials_exception from exc
+
+    user_id = payload.get("sub", None)
+    if not user_id:
+        raise credentials_exception
+
+    token_scopes = {s for s in payload.get("scope", "").split() if s}
+    required_scopes = set(security_scopes.scopes)
+    if not required_scopes.issubset(token_scopes):
+        raise HTTPException(
+            detail="Not enough permissions", status_code=status.HTTP_403_FORBIDDEN
+        )
+
+    async with get_async_session_managed() as asession:
+        try:
+            user_db = await get_user_by_id(asession=asession, user_id=int(user_id))
+            user_db.scopes = token_scopes
+            return user_db
+        except UserNotFoundError as exc:
+            raise credentials_exception from exc
 
 
 async def get_user_by_id(*, asession: AsyncSession, user_id: int) -> UserDB:
@@ -274,5 +374,55 @@ async def update_user_in_db(
 
     await asession.commit()
     await asession.refresh(user_db)
+
+    return user_db
+
+
+async def verify_user(
+    *, asession: AsyncSession, password: str, username: str
+) -> UserDB | None:
+    """Verify user credentials.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    password
+        The password povided by the user for authentication.
+    username
+        The username provided by the user for authentication.
+
+    Returns
+    -------
+    UserDB | None
+        The user object if the credentials are valid and the user is active; otherwise,
+        None.
+    """
+
+    try:
+        user_db = await get_user_by_username(asession=asession, username=username)
+    except UserNotFoundError:
+        return None
+
+    if not user_db.is_active:
+        return None
+
+    verified, hashed_password = verify_password(
+        plain_password=password, hashed_password=user_db.password_hash
+    )
+
+    if not verified:
+        return None
+
+    if hashed_password == user_db.password_hash:
+        return user_db
+
+    # Update hashed password.
+    user_db = await update_user_in_db(
+        asession=asession,
+        password_hash=hashed_password,
+        user=User(username=user_db.username),
+        user_id=user_db.user_id,
+    )
 
     return user_db

@@ -18,17 +18,11 @@ flows like refresh or consent screens — ideal for service-to-service setups.
 """
 
 # Third Party Library
-from fastapi import APIRouter, Depends, status
-from fastapi.exceptions import HTTPException
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
-from mcp_demo.auth.schemas import TokenResponse
-from mcp_demo.auth.utils import get_jwt_token, load_jwks, sanitize_scopes, verify_user
-from mcp_demo.config import Settings
-from mcp_demo.utils.database import get_async_session
+from mcp_demo.auth.utils import load_jwks
 
 TAG_METADATA = {"description": "Handles authentication", "name": "Authentication"}
 router = APIRouter(prefix="/auth", tags=[TAG_METADATA["name"]])
@@ -58,57 +52,3 @@ async def get_jwks() -> JSONResponse:
     """
 
     return JSONResponse(await load_jwks())
-
-
-@router.post(
-    "/token",
-    description=(
-        "Authenticate with username/password and receive an RS256 JWT.\n\n"
-        "- **Request**: `application/x-www-form-urlencoded`\n"
-        "- **Response**: JSON with `access_token`, `token_type`, `expires_in`\n"
-        "- **Usage**: Header `Authorization: Bearer <token>` for subsequent requests"
-    ),
-    response_model=TokenResponse,
-    summary="Issue Bearer Token",
-)
-async def issue_token(
-    asession: AsyncSession = Depends(get_async_session),
-    form: OAuth2PasswordRequestForm = Depends(),
-) -> TokenResponse:
-    """Issue a JWT token for the authenticated user.
-
-    Parameters
-    ----------
-    asession
-        The SQLAlchemy async session to use for all database connections.
-    form
-        The OAuth2 password request form.
-
-    Returns
-    -------
-    TokenResponse
-        The token response containing the access token, expiration time, and token type.
-
-    Raises
-    ------
-    HTTPException
-        If the user credentials are invalid or the user does not exist.
-    """
-
-    user_db = await verify_user(
-        asession=asession, password=form.password, username=form.username
-    )
-    if user_db is None:
-        raise HTTPException(
-            detail="Bad credentials", status_code=status.HTTP_401_UNAUTHORIZED
-        )
-
-    token = await get_jwt_token(
-        passphrase=Settings.AUTH_RSA_PASSPHRASE.get_secret_value(),
-        scopes=sanitize_scopes(requested_scopes=form.scopes),
-        sub=form.username,
-    )
-
-    return TokenResponse(
-        access_token=token, expires_in=Settings.AUTH_TOKEN_TTL, token_type="bearer"
-    )

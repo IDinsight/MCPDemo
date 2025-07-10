@@ -10,11 +10,16 @@ from typing import AsyncIterator, Callable
 # Third Party Library
 import sentry_sdk
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from loguru import logger
 from prometheus_client import CollectorRegistry, make_asgi_app, multiprocess
 from redis import asyncio as aioredis
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 # Package Library
 from mcp_demo import auth, users
@@ -27,6 +32,8 @@ REDIS_URL = Settings.REDIS_URL
 SENTRY_DSN = Settings.SENTRY_DSN
 SENTRY_TRACES_SAMPLE_RATE = Settings.SENTRY_TRACES_SAMPLE_RATE
 
+limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
+
 
 def create_fastapi_app() -> FastAPI:
     """Create the FastAPI application for the backend.
@@ -34,8 +41,8 @@ def create_fastapi_app() -> FastAPI:
     1. Create a FastAPI application instance and attach the MCP server instance to its
         state.
     2. Include routers for all the endpoints.
-    3. Add CORS middleware for cross-origin requests.
-    4. Add Prometheus middleware for metrics.
+    3. Add exception handlers.
+    4. Add middlewares.
     5. Mount the metrics app on /metrics as an independent application.
     6. Initialize Sentry for error tracking if the SENTRY_DSN is provided.
 
@@ -58,6 +65,9 @@ def create_fastapi_app() -> FastAPI:
     app.include_router(users.routers.router)
 
     # 3.
+    app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
+
+    # 4.
     origins = [
         f"http://{DOMAIN_NAME}",
         f"http://{DOMAIN_NAME}:3000",
@@ -70,9 +80,8 @@ def create_fastapi_app() -> FastAPI:
         allow_methods=["*"],
         allow_origins=origins,
     )
-
-    # 4.
     app.add_middleware(PrometheusMiddleware)
+    app.add_middleware(SlowAPIMiddleware)
 
     # 5.
     metrics_app = create_metrics_app()
@@ -112,8 +121,9 @@ async def lifespan_fastapi(app: FastAPI) -> AsyncIterator[None]:
     The process is as follows:
 
     1. Initialize Redis client for the FastAPI application.
-    2. Yield control to the FastAPI application.
-    3. Close the Redis connection when the FastAPI application finishes.
+    2. Set up the rate limiter using Redis as the storage.
+    3. Yield control to the FastAPI application.
+    4. Close the Redis connection when the FastAPI application finishes.
 
     Parameters
     ----------
@@ -137,13 +147,48 @@ async def lifespan_fastapi(app: FastAPI) -> AsyncIterator[None]:
         logger.success("Redis connection established!")
 
         # 2.
+        app.state.limiter = limiter
+
+        # 3.
         logger.log("CELEBRATE", "Ready to roll! 🚀")
 
         yield
     finally:
-        # 3.
+        # 4.
         logger.info("Closing Redis connection...")
         await app.state.redis.aclose()
         logger.success("Redis connection closed!")
 
         logger.success("FastAPI application finished!")
+
+
+async def rate_limit_handler(request: Request, exc: Exception) -> Response:
+    """Handle rate limit exceptions. This function is used to satisfy mypy.
+
+    See: https://github.com/laurentS/slowapi/issues/188
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object.
+    exc
+        The exception that was raised, expected to be a RateLimitExceeded exception.
+
+    Returns
+    -------
+    Response
+        The response to be returned, typically a JSON response with a 429 status code.
+
+    Raises
+    ------
+    Exception
+        If the exception is not a `RateLimitExceeded`, it will be raised to let FastAPI
+        handle it with its default handlers.
+    """
+
+    if isinstance(exc, RateLimitExceeded):
+        # Delegate to SlowAPI.
+        return _rate_limit_exceeded_handler(request, exc)
+
+    # Let FastAPI fall back to its default handlers for anything else.
+    raise exc

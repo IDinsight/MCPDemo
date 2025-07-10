@@ -17,14 +17,17 @@ from mcp_demo.utils.database import Base
 class UserDB(Base):
     """ORM for managing users."""
 
+    __allow_unmapped__ = True
     __tablename__ = "user"
 
     created_datetime_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.now(timezone.utc), nullable=False
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     password_hash: Mapped[str] = mapped_column(String(), nullable=False)
     recovery_codes_hash: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=True)
+    scopes: set[str] | None = None  # Runtime-only, not persisted
     updated_datetime_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

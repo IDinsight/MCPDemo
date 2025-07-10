@@ -1,8 +1,8 @@
 """Initial migration.
 
-Revision ID: 2bb85fabcf6c
+Revision ID: 97458bd687fe
 Revises:
-Create Date: 2025-07-09 18:38:21.536813
+Create Date: 2025-07-10 13:23:23.041238
 
 """
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "2bb85fabcf6c"  # pragma: allowlist secret
+revision: str = "97458bd687fe"  # pragma: allowlist secret
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -28,6 +28,7 @@ def upgrade() -> None:
         "user",
         sa.Column("created_datetime_utc", sa.DateTime(timezone=True), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False),
+        sa.Column("is_admin", sa.Boolean(), nullable=False),
         sa.Column("password_hash", sa.String(), nullable=False),
         sa.Column("recovery_codes_hash", sa.ARRAY(sa.String()), nullable=True),
         sa.Column("updated_datetime_utc", sa.DateTime(timezone=True), nullable=False),

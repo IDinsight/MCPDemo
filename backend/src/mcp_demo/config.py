@@ -44,7 +44,7 @@ class BackendSettings(BaseSettings):
         "LITELLM_MODEL_EMBEDDING", "openai/embedding"
     )
 
-    # External MCP Server #
+    # External MCP Server
     EXTERNAL_FASTMCP_HOST: str = "0.0.0.0"
     EXTERNAL_FASTMCP_MOUNT_PATH: str = "external"
     EXTERNAL_FASTMCP_PORT: int = 8200
@@ -84,15 +84,22 @@ class BackendSettings(BaseSettings):
     # Prometheus
     PROMETHEUS_MULTIPROC_DIR: str = "/tmp"
 
+    # Rate Limits
+    RATE_LIMIT_LOGIN_LOCK_SECONDS: int = 600
+    RATE_LIMIT_LOGIN_LOCK_THRESHOLD: int = 5
+    RATE_LIMIT_LOGIN_RATE: str = "5/minute"
+
     # Redis
     REDIS_CACHE_PREFIX_CHAT: str = os.getenv("REDIS_CACHE_PREFIX_CHAT", "chat_sessions")
+    REDIS_CACHE_PREFIX_LOCK_USER: str = "lock:{user}:{ip}"
+    REDIS_CACHE_PREFIX_LOGIN_FAIL: str = "login_fail:{user}:{ip}"
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
 
     # Sentry
     SENTRY_DSN: Optional[str] = None
     SENTRY_TRACES_SAMPLE_RATE: float = 1.0
 
-    # Text generation parameters.
+    # Text Generation Parameters
     TEXT_GENERATION_DEFAULT: dict[str, Any] = {
         "frequency_penalty": 0.0,
         "n": 1,

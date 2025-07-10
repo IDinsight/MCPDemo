@@ -116,6 +116,7 @@ dependencies = [
     "python-jose[cryptography]>=3.5.0",
     "redis>=6.2.0",
     "sentry-sdk[fastapi]==2.23.1",
+    "slowapi>=0.1.9",
     "sqlalchemy>=2.0.41",
     "tenacity>=9.1.2",
     "termcolor>=2.4.0",

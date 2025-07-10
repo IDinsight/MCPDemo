@@ -66,18 +66,10 @@ from cryptography.hazmat.primitives.serialization import (
 )
 from filelock import FileLock
 from loguru import logger
-from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
 from mcp_demo.config import Settings
-from mcp_demo.users.models import UserDB
-from mcp_demo.users.schemas import User
-from mcp_demo.users.utils import (
-    UserNotFoundError,
-    get_user_by_username,
-    update_user_in_db,
-)
-from mcp_demo.utils.general import atomic_write, make_dir, verify_password
+from mcp_demo.utils.general import atomic_write, make_dir
 
 _JWKS_CACHE: dict[str, Any] | None = None  # In-memory copy
 _JWKS_MTIME: float | None = None  # Last os.stat mtime
@@ -638,53 +630,3 @@ def save_keypair(
     atomic_write(data=public_pem, target_fp=public_key_fp, mode="wb", perm=0o640)
 
     return private_key_fp, public_key_fp
-
-
-async def verify_user(
-    *, asession: AsyncSession, password: str, username: str
-) -> UserDB | None:
-    """Verify user credentials.
-
-    Parameters
-    ----------
-    asession
-        The SQLAlchemy async session to use for all database connections.
-    password
-        The password provided by the user for authentication.
-    username
-        The username provided by the user for authentication.
-
-    Returns
-    -------
-    UserDB | None
-        The user object if the credentials are valid and the user is active; otherwise,
-        None.
-    """
-
-    try:
-        user_db = await get_user_by_username(asession=asession, username=username)
-    except UserNotFoundError:
-        return None
-
-    if not user_db.is_active:
-        return None
-
-    verified, hashed_password = verify_password(
-        plain_password=password, hashed_password=user_db.password_hash
-    )
-
-    if not verified:
-        return None
-
-    if hashed_password == user_db.password_hash:
-        return user_db
-
-    # Update hashed password.
-    user_db = await update_user_in_db(
-        asession=asession,
-        password_hash=hashed_password,
-        user=User(username=user_db.username),
-        user_id=user_db.user_id,
-    )
-
-    return user_db
