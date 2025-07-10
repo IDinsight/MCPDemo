@@ -7,10 +7,11 @@ from typing import Annotated, Any
 # Third Party Library
 import jwt
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, SecurityScopes
 from jose import JWTError, jwk
 from loguru import logger
+from redis import asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +27,7 @@ from mcp_demo.utils.general import generate_hash, generate_random_string, verify
 AUTH_AUDIENCE = Settings.AUTH_AUDIENCE
 AUTH_JWK_ALGORITHM = Settings.AUTH_JWK_ALGORITHM
 AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
+REDIS_CACHE_PREFIX_JTI = Settings.REDIS_CACHE_PREFIX_JTI
 
 oauth2_scheme = OAuth2PasswordBearer(
     scopes={"user": "Regular user", "admin": "Site administrator"},
@@ -65,6 +67,23 @@ class UserNotFoundError(Exception):
         super().__init__(f"User not found: {error_msg}")
 
         self.error_msg = error_msg
+
+
+async def get_redis_client(request: Request) -> aioredis.Redis:
+    """Return the Redis client stored on app.state (created at startup).
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object.
+
+    Returns
+    -------
+    aioredis.Redis
+        The Redis client instance.
+    """
+
+    return request.app.state.redis
 
 
 async def check_if_user_exists(
@@ -135,6 +154,7 @@ async def delete_user_from_db(*, asession: AsyncSession, user_id: int) -> None:
 
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
+    redis_client: Annotated[aioredis.Redis, Depends(get_redis_client)],
     security_scopes: SecurityScopes = SecurityScopes(),
 ) -> UserDB:
     """Get the current user from the JWT token.
@@ -147,6 +167,8 @@ async def get_current_user(
     ----------
     token
         The JWT token to decode and verify.
+    redis_client
+        The Redis client used to check the JTI (JWT ID) for replay attacks.
     security_scopes
         The security scopes required for the operation, used to check if the token
         has the necessary permissions.
@@ -189,6 +211,11 @@ async def get_current_user(
             issuer=AUTH_TOKEN_ISSUER,
             options={"require": ["exp", "sub"]},
         )
+        jti = payload.get("jti")
+        if not jti or not await redis_client.exists(
+            REDIS_CACHE_PREFIX_JTI.format(jti=jti)
+        ):
+            raise credentials_exception
     except (StopIteration, JWTError) as exc:
         raise credentials_exception from exc
 

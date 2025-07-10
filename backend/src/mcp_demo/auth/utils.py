@@ -69,6 +69,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 from filelock import FileLock
 from loguru import logger
+from redis import asyncio as aioredis
 
 # Package Library
 from mcp_demo.config import Settings
@@ -93,6 +94,7 @@ AUTH_RSA_KEY_SIZE = Settings.AUTH_RSA_KEY_SIZE
 AUTH_RSA_PUBLIC_EXPONENT = Settings.AUTH_RSA_PUBLIC_EXPONENT
 AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
 AUTH_TOKEN_TTL = Settings.AUTH_TOKEN_TTL
+REDIS_CACHE_PREFIX_JTI = Settings.REDIS_CACHE_PREFIX_JTI
 
 
 def _set_cache(*, mtime: float | None, new_jwks: dict[str, Any]) -> None:
@@ -190,6 +192,7 @@ async def get_jwt_token(
     *,
     jwks_fn: str = AUTH_JWKS_FN,
     passphrase: str,
+    redis_client: aioredis.Redis,
     scopes: list[str],
     sub: str,
 ) -> str:
@@ -207,6 +210,10 @@ async def get_jwt_token(
     3. Create a JWT payload with the subject, scopes, issuer, audience, issued at
          time, and expiration time.
     4. Sign with RS256 and embed the kid so verifiers find the right JWK.
+    5. Store the JWT ID (jti) in Redis with a TTL equal to the token's expiration time,
+        ensuring that the same jti cannot be reused within the token's lifetime. If
+        the jti already exists, retry up to `max_attempts` times to generate a unique
+        jti. If it still fails, raise an error.
 
     Parameters
     ----------
@@ -215,6 +222,8 @@ async def get_jwt_token(
         generating a new key if the JWKS file is empty.
     passphrase
         Passphrase to decrypt the private key.
+    redis_client
+        An instance of `aioredis.Redis` used to store the JWT ID (jti) with a TTL.
     scopes
         A list of scopes to include in the JWT token.
     sub
@@ -227,6 +236,8 @@ async def get_jwt_token(
 
     Raises
     ------
+    RuntimeError
+        If the function is unable to mint a unique JWT ID (jti) after several attempts.
     ValueError
         If any of the requested scopes are not allowed by the authentication service.
         This ensures that only valid scopes are included in the JWT token.
@@ -243,24 +254,42 @@ async def get_jwt_token(
     )
 
     # 3.
-    now = int(time.time())
-    payload = {
-        "aud": AUTH_AUDIENCE,
-        "exp": now + AUTH_TOKEN_TTL,
-        "iat": now,
-        "iss": AUTH_TOKEN_ISSUER,
-        "jti": token_hex(12),
-        "nbf": now - 30,
-        "scope": " ".join(scopes),
-        "sub": sub,
-        "typ": "JWT",
-    }
+    max_attempts = 3
+    attempt_num = 1
+    while attempt_num <= max_attempts:
+        # 3.
+        jti = token_hex(12)
+        now = int(time.time())
+        payload = {
+            "aud": AUTH_AUDIENCE,
+            "exp": now + AUTH_TOKEN_TTL,
+            "iat": now,
+            "iss": AUTH_TOKEN_ISSUER,
+            "jti": jti,
+            "nbf": now - 30,
+            "scope": " ".join(scopes),
+            "sub": sub,
+            "typ": "JWT",
+        }
 
-    # 4.
-    return cast(
-        str,
-        jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid}),
-    )
+        # 4.
+        token = cast(
+            str,
+            jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid}),
+        )
+
+        # 5.
+        is_set = await redis_client.set(
+            ex=AUTH_TOKEN_TTL,
+            name=REDIS_CACHE_PREFIX_JTI.format(jti=jti),
+            nx=True,  # Only if it does not yet exist
+            value=sub,
+        )
+        if is_set:
+            return token
+        attempt_num += 1
+
+    raise RuntimeError(f"Unable to mint unique JTI after {max_attempts} attempts")
 
 
 async def get_latest_private_key_and_kid(

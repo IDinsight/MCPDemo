@@ -120,6 +120,7 @@ async def login(
 
     token = await get_jwt_token(
         passphrase=Settings.AUTH_RSA_PASSPHRASE.get_secret_value(),
+        redis_client=redis_client,
         scopes=sanitize_scopes(requested_scopes=user_scopes),
         sub=str(user_db.user_id),
     )
@@ -130,7 +131,9 @@ async def login(
 
 
 @router.post("/register", response_model=UserCreateWithRecoveryCodes)
+@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
 async def register(
+    request: Request,  # pylint: disable=W0613
     user: UserCreateWithPassword,
     asession: AsyncSession = Depends(get_async_session),
 ) -> UserCreateWithRecoveryCodes:
@@ -144,6 +147,9 @@ async def register(
 
     Parameters
     ----------
+    request
+        The FastAPI request object, used to access the requested scopes. This is needed
+        for SlowAPI rate limiting.
     user
         The user object to create.
     asession
@@ -182,8 +188,10 @@ async def register(
 
 
 @router.delete("/{user_id}", response_model=UserDeleteResponse)
+@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
 async def delete_user(
     calling_user_db: Annotated[UserDB, Depends(get_current_user)],
+    request: Request,  # pylint: disable=W0613
     user_id: int,
     asession: AsyncSession = Depends(get_async_session),
     csm: AsyncChatSessionManager = Depends(get_chat_session_manager),
@@ -203,6 +211,9 @@ async def delete_user(
     ----------
     calling_user_db
         The user database object of the authenticated user, used to verify permissions.
+    request
+        The FastAPI request object, used to access the requested scopes. This is needed
+        for SlowAPI rate limiting.
     user_id
         The user ID to delete.
     asession
@@ -258,8 +269,11 @@ async def delete_user(
 
 
 @router.put("/reset-password", response_model=UserRetrieve)
+@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
 async def reset_password(
-    user: UserResetPassword, asession: AsyncSession = Depends(get_async_session)
+    request: Request,  # pylint: disable=W0613
+    user: UserResetPassword,
+    asession: AsyncSession = Depends(get_async_session),
 ) -> UserRetrieve:
     """Reset user password. Takes a user object, consumes the supplied recovery code to
     verify the user, generates a new password hash to replace the old one in the
@@ -272,6 +286,9 @@ async def reset_password(
 
     Parameters
     ----------
+    request
+        The FastAPI request object, used to access the requested scopes. This is needed
+        for SlowAPI rate limiting.
     user
         The user object with the new password and recovery code.
     asession
