@@ -191,7 +191,7 @@ async def get_cached_jwks() -> dict[str, Any]:
 async def get_jwt_token(
     *,
     jwks_fn: str = AUTH_JWKS_FN,
-    passphrase: str,
+    passphrase: str | None = None,
     redis_client: aioredis.Redis,
     scopes: list[str],
     sub: str,
@@ -249,6 +249,7 @@ async def get_jwt_token(
         raise ValueError(f"Unrecognised scopes requested: {', '.join(invalid_scopes)}")
 
     # 2.
+    passphrase = passphrase or Settings.AUTH_RSA_PASSPHRASE.get_secret_value()
     private_key, kid = await get_latest_private_key_and_kid(
         jwks_fn=jwks_fn, passphrase=passphrase
     )

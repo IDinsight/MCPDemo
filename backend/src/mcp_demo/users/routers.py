@@ -15,9 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Package Library
 from mcp_demo.auth.utils import get_jwt_token, sanitize_scopes
 from mcp_demo.config import Settings
+from mcp_demo.schemas import TokenResponse
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import (
-    TokenResponse,
     UserCreateWithPassword,
     UserCreateWithRecoveryCodes,
     UserDeleteResponse,
@@ -44,7 +44,7 @@ from mcp_demo.utils.rate_limit import (
     reset_failed_login,
 )
 
-TAG_METADATA = {"description": "_Requires user login._ Manage users", "name": "User"}
+TAG_METADATA = {"description": "Manages users", "name": "User"}
 router = APIRouter(prefix="/user", tags=[TAG_METADATA["name"]])
 
 limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)

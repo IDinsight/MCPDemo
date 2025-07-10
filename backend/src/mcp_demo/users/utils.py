@@ -7,7 +7,7 @@ from typing import Annotated, Any
 # Third Party Library
 import jwt
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, SecurityScopes
 from jose import JWTError, jwk
 from loguru import logger
@@ -22,7 +22,12 @@ from mcp_demo.config import Settings
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import User, UserCreateWithPassword, UserResetPassword
 from mcp_demo.utils.database import get_async_session_managed
-from mcp_demo.utils.general import generate_hash, generate_random_string, verify_hash
+from mcp_demo.utils.general import (
+    generate_hash,
+    generate_random_string,
+    get_redis_client,
+    verify_hash,
+)
 
 AUTH_AUDIENCE = Settings.AUTH_AUDIENCE
 AUTH_JWK_ALGORITHM = Settings.AUTH_JWK_ALGORITHM
@@ -67,23 +72,6 @@ class UserNotFoundError(Exception):
         super().__init__(f"User not found: {error_msg}")
 
         self.error_msg = error_msg
-
-
-async def get_redis_client(request: Request) -> aioredis.Redis:
-    """Return the Redis client stored on app.state (created at startup).
-
-    Parameters
-    ----------
-    request
-        The FastAPI request object.
-
-    Returns
-    -------
-    aioredis.Redis
-        The Redis client instance.
-    """
-
-    return request.app.state.redis
 
 
 async def check_if_user_exists(
