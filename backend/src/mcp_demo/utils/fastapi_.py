@@ -22,7 +22,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 # Package Library
-from mcp_demo import auth, users
+from mcp_demo import auth, clients, users
 from mcp_demo.config import Settings
 from mcp_demo.middlewares.prometheus_ import PrometheusMiddleware
 from mcp_demo.utils.general import make_dir
@@ -56,12 +56,13 @@ def create_fastapi_app() -> FastAPI:
     app = FastAPI(
         debug=True,
         lifespan=lifespan_fastapi,
-        openapi_tags=[auth.TAG_METADATA, users.TAG_METADATA],
+        openapi_tags=[auth.TAG_METADATA, clients.TAG_METADATA, users.TAG_METADATA],
         title="MCP Demo APIs",
     )
 
     # 2.
     app.include_router(auth.routers.router)
+    app.include_router(clients.routers.router)
     app.include_router(users.routers.router)
 
     # 3.

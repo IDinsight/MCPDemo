@@ -1,10 +1,8 @@
 """This module contains FastAPI routers for authentication endpoints.
 
-This module provides two key endpoints for issuing and distributing JWT bearer tokens:
+This module provides the following endpoints:
 
-1. **POST /auth/token** — Authenticates a user (via username/password), issues an
-    RS256-signed JWT, and returns it in a Bearer format.
-2. **GET  /auth/jwks.json** — Serves the JSON Web Key Set (JWKS) containing public keys
+1. **GET  /auth/jwks.json** — Serves the JSON Web Key Set (JWKS) containing public keys
     used to verify the tokens. This can be used by servers or clients to validate the
     JWT signatures (e.g., the FastMCP `BearerAuthProvider`).
 
@@ -24,7 +22,7 @@ from fastapi.responses import JSONResponse
 # Package Library
 from mcp_demo.auth.utils import get_cached_jwks
 
-TAG_METADATA = {"description": "Handles authentication", "name": "Authentication"}
+TAG_METADATA = {"description": "Handles user authentication", "name": "Authentication"}
 router = APIRouter(prefix="/auth", tags=[TAG_METADATA["name"]])
 
 

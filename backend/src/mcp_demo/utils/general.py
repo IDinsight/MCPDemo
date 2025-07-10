@@ -23,7 +23,9 @@ import yaml
 from argon2 import PasswordHasher
 from argon2 import exceptions as argon2_exc
 from argon2.low_level import Type
+from fastapi import Request
 from loguru import logger
+from redis import asyncio as aioredis
 
 # Tuned for 64 MiB & 2 rounds ≈ 120 ms on AWS t4g.medium.
 _PH = PasswordHasher(
@@ -227,6 +229,23 @@ def generate_recovery_codes(*, code_length: int = 20, num_codes: int = 5) -> lis
     ]
 
     return recovery_codes
+
+
+async def get_redis_client(request: Request) -> aioredis.Redis:
+    """Return the Redis client stored on app.state (created at startup).
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object.
+
+    Returns
+    -------
+    aioredis.Redis
+        The Redis client instance.
+    """
+
+    return request.app.state.redis
 
 
 def make_dir(dir_: str | Path, mode: int = 0o777, verbose: bool = True) -> None:
