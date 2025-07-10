@@ -49,7 +49,7 @@ REDIS_CACHE_PREFIX_CHAT = Settings.REDIS_CACHE_PREFIX_CHAT
 
 
 @router.post(
-    "/token",
+    "/login",
     description=(
         "Authenticate with username/password and receive an RS256 JWT.\n\n"
         "- **Request**: `application/x-www-form-urlencoded`\n"

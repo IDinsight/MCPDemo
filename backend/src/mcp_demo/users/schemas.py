@@ -41,6 +41,7 @@ class UserCreate(User):
 class UserCreateWithPassword(User):
     """Pydantic model for user creation with a password."""
 
+    is_admin: bool = False
     password: str
 
 

@@ -33,7 +33,7 @@ AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
 
 oauth2_scheme = OAuth2PasswordBearer(
     scopes={"user": "Regular user", "admin": "Site administrator"},
-    tokenUrl="/user/token",
+    tokenUrl="/user/login",
 )
 
 
@@ -284,7 +284,7 @@ async def save_user_to_db(
     *,
     asession: AsyncSession,
     recovery_codes: list[str],
-    user: User | UserCreateWithPassword,
+    user: UserCreateWithPassword,
 ) -> UserDB:
     """Save a user in the database.
 
@@ -324,11 +324,11 @@ async def save_user_to_db(
     user_db = UserDB(
         created_datetime_utc=datetime.now(timezone.utc),
         is_active=True,
+        is_admin=user.is_admin,
         password_hash=generate_hash(text=password),
         recovery_codes_hash=[
             generate_hash(text=recovery_code) for recovery_code in recovery_codes
         ],
-        updated_datetime_utc=datetime.now(timezone.utc),
         username=user.username,
     )
     asession.add(user_db)
@@ -364,12 +364,7 @@ async def update_user_in_db(
         The user object saved in the database after update.
     """
 
-    user_db = UserDB(
-        updated_datetime_utc=datetime.now(timezone.utc),
-        user_id=user_id,
-        username=user.username,
-        **kwargs,
-    )
+    user_db = UserDB(user_id=user_id, username=user.username, **kwargs)
     user_db = await asession.merge(user_db)
 
     await asession.commit()

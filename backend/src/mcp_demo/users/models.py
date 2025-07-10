@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 # Third Party Library
 from sqlalchemy import ARRAY, Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql import func
 
 # Package Library
 from mcp_demo.utils.database import Base
@@ -29,7 +30,10 @@ class UserDB(Base):
     recovery_codes_hash: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=True)
     scopes: set[str] | None = None  # Runtime-only, not persisted
     updated_datetime_utc: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        DateTime(timezone=True),
+        nullable=False,
+        onupdate=func.now(),  # On every UPDATE  # pylint: disable=E1102
+        server_default=func.now(),  # First INSERT  # pylint: disable=E1102
     )
     user_id: Mapped[int] = mapped_column(Integer, nullable=False, primary_key=True)
     username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
