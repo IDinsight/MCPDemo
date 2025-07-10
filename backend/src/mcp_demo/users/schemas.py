@@ -1,5 +1,8 @@
 """This module contains Pydantic models for users."""
 
+# Standard Library
+from datetime import datetime
+
 # Third Party Library
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -57,5 +60,28 @@ class UserDeleteResponse(User):
     """Pydantic model for user deletion response."""
 
     user_id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserResetPassword(BaseModel):
+    """Pydantic model for user password reset."""
+
+    password: str
+    recovery_code: str
+    username: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserRetrieve(BaseModel):
+    """Pydantic model for user retrieval."""
+
+    created_datetime_utc: datetime
+    is_active: bool
+    is_admin: bool
+    updated_datetime_utc: datetime
+    user_id: int
+    username: str
 
     model_config = ConfigDict(from_attributes=True)

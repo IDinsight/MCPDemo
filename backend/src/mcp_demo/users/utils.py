@@ -19,13 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mcp_demo.auth.utils import load_jwks
 from mcp_demo.config import Settings
 from mcp_demo.users.models import UserDB
-from mcp_demo.users.schemas import User, UserCreateWithPassword
+from mcp_demo.users.schemas import User, UserCreateWithPassword, UserResetPassword
 from mcp_demo.utils.database import get_async_session_managed
-from mcp_demo.utils.general import (
-    generate_hash,
-    generate_random_string,
-    verify_password,
-)
+from mcp_demo.utils.general import generate_hash, generate_random_string, verify_hash
 
 AUTH_AUDIENCE = Settings.AUTH_AUDIENCE
 AUTH_JWK_ALGORITHM = Settings.AUTH_JWK_ALGORITHM
@@ -71,7 +67,9 @@ class UserNotFoundError(Exception):
         self.error_msg = error_msg
 
 
-async def check_if_user_exists(*, asession: AsyncSession, user: User) -> UserDB | None:
+async def check_if_user_exists(
+    *, asession: AsyncSession, user: User | UserResetPassword
+) -> UserDB | None:
     """Check if a user exists in the database.
 
     Parameters
@@ -280,6 +278,38 @@ async def get_user_by_username(*, asession: AsyncSession, username: str) -> User
         ) from err
 
 
+async def reset_user_password(
+    *,
+    asession: AsyncSession,
+    user: UserResetPassword,
+    user_db: UserDB,
+) -> UserDB:
+    """Hash the new password, optionally regenerate recovery codes, and persist the
+    changes **on the existing row**.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    user
+        The user object to reset the password.
+    user_db
+        The user database object containing the user ID and recovery code.
+
+    Returns
+    -------
+    UserDB
+        The user object saved in the database after password reset.
+    """
+
+    user_db.password_hash = generate_hash(text=user.password)
+
+    await asession.commit()
+    await asession.refresh(user_db)
+
+    return user_db
+
+
 async def save_user_to_db(
     *,
     asession: AsyncSession,
@@ -373,6 +403,35 @@ async def update_user_in_db(
     return user_db
 
 
+async def verify_recovery_code(
+    *, asession: AsyncSession, user_db: UserDB, recovery_code: str
+) -> bool:
+    """Verify a recovery code for a user.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    user_db
+        The user database object containing the recovery codes.
+    recovery_code
+        The recovery code to verify.
+
+    Returns
+    -------
+    bool
+        True if the recovery code is valid and has not been used; otherwise, False.
+    """
+
+    for recovery_code_hash in user_db.recovery_codes_hash:
+        verified, _ = verify_hash(text=recovery_code, hashed=recovery_code_hash)
+        if verified:
+            user_db.recovery_codes_hash.remove(recovery_code_hash)  # One-time use
+            await asession.commit()
+            return True
+    return False
+
+
 async def verify_user(
     *, asession: AsyncSession, password: str, username: str
 ) -> UserDB | None:
@@ -402,9 +461,7 @@ async def verify_user(
     if not user_db.is_active:
         return None
 
-    verified, hashed_password = verify_password(
-        plain_password=password, hashed_password=user_db.password_hash
-    )
+    verified, hashed_password = verify_hash(text=password, hashed=user_db.password_hash)
 
     if not verified:
         return None

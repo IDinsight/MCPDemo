@@ -307,10 +307,8 @@ def remove_json_markdown(*, text: str) -> str:
     return text.strip()
 
 
-def verify_password(
-    *, plain_password: str, hashed_password: str
-) -> tuple[bool, str | None]:
-    """Verify a plain text password against a hashed password.
+def verify_hash(*, text: str, hashed: str) -> tuple[bool, str | None]:
+    """Verify plain text against a hash.
 
     If the stored hash was generated with weaker parameters, it is transparently
     re-hashed with the current policy and the new digest is returned; callers can
@@ -318,26 +316,26 @@ def verify_password(
 
     Parameters
     ----------
-    plain_password
-        The plain text password to verify.
-    hashed_password
+    text
+        The plain text to verify against the hash.
+    hashed
         The hashed password to verify against.
 
     Returns
     -------
     tuple[bool, str | None]
-        A tuple containing a boolean indicating whether the password is valid and the
-        hashed password (which may be re-hashed if needed).
+        A tuple containing a boolean indicating whether the text is valid and the
+        hashed value (which may be re-hashed if needed).
     """
 
     try:
-        _PH.verify(hashed_password, plain_password)
+        _PH.verify(hashed, text)
     except argon2_exc.VerifyMismatchError:
         return False, None
 
-    if _PH.check_needs_rehash(hashed_password):
-        hashed_password = generate_hash(text=plain_password)
-    return True, hashed_password
+    if _PH.check_needs_rehash(hashed):
+        hashed = generate_hash(text=text)
+    return True, hashed
 
 
 def yaml_serializer(data: dict[str, Any]) -> str:

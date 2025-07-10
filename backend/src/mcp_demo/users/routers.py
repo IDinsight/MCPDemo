@@ -21,6 +21,8 @@ from mcp_demo.users.schemas import (
     UserCreateWithPassword,
     UserCreateWithRecoveryCodes,
     UserDeleteResponse,
+    UserResetPassword,
+    UserRetrieve,
 )
 from mcp_demo.users.utils import (
     UserNotFoundError,
@@ -28,7 +30,9 @@ from mcp_demo.users.utils import (
     delete_user_from_db,
     get_current_user,
     get_user_by_id,
+    reset_user_password,
     save_user_to_db,
+    verify_recovery_code,
     verify_user,
 )
 from mcp_demo.utils.chat import AsyncChatSessionManager, get_chat_session_manager
@@ -251,3 +255,65 @@ async def delete_user(
         await csm.delete_chat_history(session_id=session_id)
 
     return UserDeleteResponse(user_id=user_id, username=user_db.username)
+
+
+@router.put("/reset-password", response_model=UserRetrieve)
+async def reset_password(
+    user: UserResetPassword, asession: AsyncSession = Depends(get_async_session)
+) -> UserRetrieve:
+    """Reset user password. Takes a user object, consumes the supplied recovery code to
+    verify the user, generates a new password hash to replace the old one in the
+    database, and returns the updated user object.
+
+    NB: When this endpoint is called, the assumption is that the calling user is the
+    user that is requesting to reset their own password. This is because a user's
+    password is universal and belongs to the user. Thus, only a user can reset their
+    own password.
+
+    Parameters
+    ----------
+    user
+        The user object with the new password and recovery code.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+
+    Returns
+    -------
+    UserRetrieve
+        The updated user object.
+
+    Raises
+    ------
+    HTTPException
+        If the user does not exist in the database.
+        If the recovery code is invalid.
+    """
+
+    user_to_update = await check_if_user_exists(asession=asession, user=user)
+
+    if user_to_update is None:
+        raise HTTPException(
+            detail="User not found.", status_code=status.HTTP_404_NOT_FOUND
+        )
+
+    verified_recovery_code = await verify_recovery_code(
+        asession=asession, user_db=user_to_update, recovery_code=user.recovery_code
+    )
+
+    if not verified_recovery_code:
+        raise HTTPException(
+            detail="Invalid recovery code.", status_code=status.HTTP_400_BAD_REQUEST
+        )
+
+    updated_user_db = await reset_user_password(
+        asession=asession, user=user, user_db=user_to_update
+    )
+
+    return UserRetrieve(
+        created_datetime_utc=updated_user_db.created_datetime_utc,
+        is_active=updated_user_db.is_active,
+        is_admin=updated_user_db.is_admin,
+        updated_datetime_utc=updated_user_db.updated_datetime_utc,
+        user_id=updated_user_db.user_id,
+        username=updated_user_db.username,
+    )
