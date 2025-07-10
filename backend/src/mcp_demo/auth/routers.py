@@ -22,7 +22,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 # Package Library
-from mcp_demo.auth.utils import load_jwks
+from mcp_demo.auth.utils import get_cached_jwks
 
 TAG_METADATA = {"description": "Handles authentication", "name": "Authentication"}
 router = APIRouter(prefix="/auth", tags=[TAG_METADATA["name"]])
@@ -51,4 +51,4 @@ async def get_jwks() -> JSONResponse:
         The JWKS containing the public keys used to verify JWT tokens.
     """
 
-    return JSONResponse(await load_jwks())
+    return JSONResponse(await get_cached_jwks())

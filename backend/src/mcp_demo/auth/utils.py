@@ -51,8 +51,11 @@ import os
 import time
 
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from pathlib import Path
 from secrets import token_hex
+from threading import Lock
+from types import MappingProxyType
 from typing import Any, AsyncIterator, cast
 
 # Third Party Library
@@ -73,6 +76,7 @@ from mcp_demo.utils.general import atomic_write, make_dir
 
 _JWKS_CACHE: dict[str, Any] | None = None  # In-memory copy
 _JWKS_MTIME: float | None = None  # Last os.stat mtime
+_JWKS_THREAD_LOCK = Lock()  # Per-process guard
 
 PATHS_PROJECT_DIR = os.getenv("PATHS_PROJECT_DIR", None)
 assert PATHS_PROJECT_DIR is not None
@@ -89,6 +93,30 @@ AUTH_RSA_KEY_SIZE = Settings.AUTH_RSA_KEY_SIZE
 AUTH_RSA_PUBLIC_EXPONENT = Settings.AUTH_RSA_PUBLIC_EXPONENT
 AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
 AUTH_TOKEN_TTL = Settings.AUTH_TOKEN_TTL
+
+
+def _set_cache(*, mtime: float | None, new_jwks: dict[str, Any]) -> None:
+    """Atomically replace the in-memory JWKS + mtime for *all* threads.
+
+    If we mutate the old dict (e.g., insert(0, key)), any other thread that already
+    holds a reference can observe a half-updated structure. Creating a brand-new
+    dict/list and swapping the reference guarantees readers see either the old or the
+    new version—never an in-between state.
+
+    Parameters
+    ----------
+    mtime
+        The last modification time of the JWKS file, used to track changes.
+    new_jwks
+        The new JWKS (JSON Web Key Set) to be set in the cache. This should be a fresh
+        dictionary containing the keys, typically loaded from `jwks.json`.
+    """
+
+    global _JWKS_CACHE, _JWKS_MTIME
+    with _JWKS_THREAD_LOCK:
+        # Never mutate the existing dict; just point to a fresh copy.
+        _JWKS_CACHE = new_jwks
+        _JWKS_MTIME = mtime
 
 
 def b64url(*, data: bytes) -> str:
@@ -136,6 +164,26 @@ def generate_rsa_keypair(
     )
 
     return private_key, private_key.public_key()
+
+
+async def get_cached_jwks() -> dict[str, Any]:
+    """Thread-safe, read-only view of the in-memory JWKS.
+
+    Returns
+    -------
+    dict[str, Any]
+        The cached JWKS (JSON Web Key Set) containing the keys. If the cache is empty,
+        it will load the JWKS from disk.
+    """
+
+    if _JWKS_CACHE is None:
+        # First call – prime the cache.
+        await load_jwks()
+
+    assert isinstance(_JWKS_CACHE, dict) and _JWKS_CACHE
+
+    # MappingProxyType prevents accidental mutation by callers.
+    return cast(dict[str, Any], MappingProxyType(_JWKS_CACHE))
 
 
 async def get_jwt_token(
@@ -306,25 +354,22 @@ async def load_jwks(*, jwks_fn: str = AUTH_JWKS_FN) -> dict[str, Any]:
         The JWKS containing the keys, or an empty set if the file does not exist.
     """
 
-    global _JWKS_CACHE, _JWKS_MTIME
-
     jwks_fp = _SECRETS_DIR / jwks_fn
 
     async with process_lock():
         if not jwks_fp.is_file():
-            _JWKS_CACHE = {"keys": []}
-            _JWKS_MTIME = None
+            _set_cache(mtime=None, new_jwks={"keys": []})
             assert isinstance(_JWKS_CACHE, dict)
             return _JWKS_CACHE
 
         mtime = jwks_fp.stat().st_mtime
         if _JWKS_CACHE is None or _JWKS_MTIME != mtime:  # File changed or first read
             try:
-                _JWKS_CACHE = json.loads(jwks_fp.read_text("utf-8"))
-                _JWKS_MTIME = mtime
+                new_jwks = json.loads(jwks_fp.read_text("utf-8"))
             except json.JSONDecodeError:
                 logger.warning("Corrupted JWKS, regenerating")
-                _JWKS_CACHE = {"keys": []}
+                new_jwks = {"keys": []}
+            _set_cache(mtime=mtime, new_jwks=new_jwks)  # Single, atomic swap
         assert isinstance(_JWKS_CACHE, dict)
         return _JWKS_CACHE
 
@@ -510,8 +555,9 @@ async def rotate_keys(
         )
 
         # 4.
-        jwks = await load_jwks(jwks_fn=jwks_fn)
-        jwks["keys"].insert(0, jwk_from_public_key(kid=kid, public_key=public_key))
+        jwks = deepcopy(await load_jwks(jwks_fn=jwks_fn))
+        new_public_jwk = jwk_from_public_key(kid=kid, public_key=public_key)
+        jwks["keys"].insert(0, new_public_jwk)  # Safe – private copy
 
         # 5.
         while len(jwks["keys"]) > keep_last_n:
@@ -531,10 +577,8 @@ async def rotate_keys(
         await asyncio.to_thread(save_jwks, jwks=jwks, jwks_fn=jwks_fn)
 
         # 7.
-        global _JWKS_CACHE, _JWKS_MTIME
-
-        _JWKS_CACHE = jwks
-        _JWKS_MTIME = (_SECRETS_DIR / jwks_fn).stat().st_mtime
+        mtime = (_SECRETS_DIR / jwks_fn).stat().st_mtime
+        _set_cache(new_jwks=jwks, mtime=mtime)
 
         if kid in {key["kid"] for key in jwks["keys"][1:]}:
             raise ValueError(f"Duplicate kid detected after rotation: {kid}")
