@@ -66,8 +66,7 @@ async def register(
         The OAuth2 client object to create, containing `client_id`, `secret`, `scopes`,
         and `is_active`.
     request
-        The FastAPI request object, used to access the requested scopes. This is needed
-        for SlowAPI rate limiting.
+        The FastAPI request object. This is needed for SlowAPI rate limiting.
     asession
         The SQLAlchemy async session to use for all database connections.
 
@@ -102,8 +101,8 @@ async def register(
 @limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
 async def delete_client(
     calling_client_db: Annotated[Oauth2ClientDB, Depends(get_current_client)],
-    request: Request,  # pylint: disable=W0613
     client_id: str,
+    request: Request,  # pylint: disable=W0613
     asession: AsyncSession = Depends(get_async_session),
 ) -> OAuth2ClientDeleteResponse:
     """Delete client by ID from database.
@@ -121,11 +120,10 @@ async def delete_client(
     calling_client_db
         The client database object of the authenticated client, used to verify
         permissions.
-    request
-        The FastAPI request object, used to access the requested scopes. This is needed
-        for SlowAPI rate limiting.
     client_id
         The client ID to delete.
+    request
+        The FastAPI request object. This is needed for SlowAPI rate limiting.
     asession
         The SQLAlchemy async session to use for all database connections.
 

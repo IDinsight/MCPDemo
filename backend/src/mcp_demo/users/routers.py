@@ -61,8 +61,7 @@ async def register(
     Parameters
     ----------
     request
-        The FastAPI request object, used to access the requested scopes. This is needed
-        for SlowAPI rate limiting.
+        The FastAPI request object. This is needed for SlowAPI rate limiting.
     user
         The user object to create.
     asession
@@ -125,8 +124,7 @@ async def delete_user(
     calling_user_db
         The user database object of the authenticated user, used to verify permissions.
     request
-        The FastAPI request object, used to access the requested scopes. This is needed
-        for SlowAPI rate limiting.
+        The FastAPI request object. This is needed for SlowAPI rate limiting.
     user_id
         The user ID to delete.
     asession
@@ -200,8 +198,7 @@ async def reset_password(
     Parameters
     ----------
     request
-        The FastAPI request object, used to access the requested scopes. This is needed
-        for SlowAPI rate limiting.
+        The FastAPI request object. This is needed for SlowAPI rate limiting.
     user
         The user object with the new password and recovery code.
     asession

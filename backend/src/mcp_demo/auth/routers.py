@@ -80,8 +80,8 @@ async def get_jwks() -> JSONResponse:
 async def introspect_token(
     request: Request,  # pylint: disable=W0613
     asession: AsyncSession = Depends(get_async_session),
-    token: str = Form(..., description="Access or refresh token to introspect"),
     credentials: HTTPBasicCredentials | None = Depends(basic_auth),
+    token: str = Form(..., description="Access or refresh token to introspect"),
 ) -> IntrospectionResponse:
     """RFC 7662-style token introspection.
 
@@ -106,15 +106,14 @@ async def introspect_token(
     Parameters
     ----------
     request
-        The FastAPI request object, used to access the requested scopes. This is needed
-        for SlowAPI rate limiting.
+        The FastAPI request object. This is needed for SlowAPI rate limiting.
     asession
         The SQLAlchemy async session to use for all database connections.
-    token
-        The JWT token to introspect, provided as a form field.
     credentials
         Optional HTTP Basic credentials for client authentication. If provided, the
         caller must be a registered client with a valid secret.
+    token
+        The JWT token to introspect, provided as a form field.
 
     Returns
     -------

@@ -8,7 +8,12 @@ from typing import Any
 # Third Party Library
 from fastapi import Request
 from fastmcp.exceptions import ToolError
-from fastmcp.server.dependencies import get_context, get_http_request
+from fastmcp.server.dependencies import (
+    AccessToken,
+    get_access_token,
+    get_context,
+    get_http_request,
+)
 from fastmcp.tools import Tool
 from fastmcp.tools.tool import ToolResult
 from fastmcp.tools.tool_transform import ArgTransform, forward
@@ -134,9 +139,22 @@ async def calculate_bmi(*, height: float, weight: float) -> float:
 
     Raises
     ------
+    ToolError
+        If the user does not have the required permissions.
     ValueError
         If height is less than or equal to zero.
     """
+
+    access_token: AccessToken | None = get_access_token()
+    assert access_token is not None
+    user_scopes = access_token.scopes
+
+    required_scope = "admin"
+    if user_scopes and required_scope not in user_scopes:
+        raise ToolError(
+            f"Insufficient permissions: '{required_scope}' scope required. "
+            f"Got: {user_scopes}"
+        )
 
     ctx = get_context()
     await ctx.error(
