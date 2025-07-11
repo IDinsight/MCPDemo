@@ -148,7 +148,9 @@ async def delete_user(
     """
 
     # 1.
-    if calling_user_db.user_id != user_id and "admin" not in calling_user_db.scopes:
+    if calling_user_db.user_id != user_id and "admin" not in (
+        calling_user_db.scopes or []
+    ):
         raise HTTPException(
             detail=f"User ID not found: {user_id}.",
             status_code=status.HTTP_404_NOT_FOUND,
