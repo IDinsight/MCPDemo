@@ -16,7 +16,35 @@ from mcp_demo.utils.database import Base
 
 
 class UserDB(Base):
-    """ORM for managing users."""
+    """ORM for managing users.
+
+    Notes
+    -----
+    1. `scopes` is runtime-only: populated from the access-token payload and never
+        persisted to the database.
+
+    Attributes
+    ----------
+    created_datetime_utc
+        Row creation timestamp (server default: ``NOW() AT TIME ZONE 'UTC'``).
+    is_active
+        Soft-delete flag; inactive users cannot log in.
+    is_admin
+        Grants elevated privileges enforced by the router guards.
+    password_hash
+        *Argon2id* hash of the user’s password.
+    recovery_codes_hash
+        One-time recovery codes, individually hashed. ``None`` until 2-factor auth is
+        enabled.
+    scopes
+        Injected at request time; not stored in the database.
+    updated_datetime_utc
+        Automatically updated on each ``UPDATE`` via `func.now()`.
+    user_id
+        Surrogate primary key.
+    username
+        Unique login name; indexed and case-sensitive.
+    """
 
     __allow_unmapped__ = True
     __tablename__ = "user"

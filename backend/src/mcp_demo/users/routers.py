@@ -50,7 +50,7 @@ async def register(
     user: UserCreateWithPassword,
     asession: AsyncSession = Depends(get_async_session),
 ) -> UserCreateWithRecoveryCodes:
-    """
+    """Register a new user and issue recovery codes.
 
     The process is as follows:
 
@@ -188,9 +188,7 @@ async def reset_password(
     user: UserResetPassword,
     asession: AsyncSession = Depends(get_async_session),
 ) -> UserRetrieve:
-    """Reset user password. Takes a user object, consumes the supplied recovery code to
-    verify the user, generates a new password hash to replace the old one in the
-    database, and returns the updated user object.
+    """Reset user password using a one-time recovery code.
 
     NB: When this endpoint is called, the assumption is that the calling user is the
     user that is requesting to reset their own password. This is because a user's
