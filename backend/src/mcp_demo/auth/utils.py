@@ -55,7 +55,6 @@ from copy import deepcopy
 from pathlib import Path
 from secrets import token_hex
 from threading import Lock
-from types import MappingProxyType
 from typing import Any, AsyncIterator, cast
 
 # Third Party Library
@@ -185,8 +184,7 @@ async def get_cached_jwks() -> dict[str, Any]:
 
     assert isinstance(_JWKS_CACHE, dict) and _JWKS_CACHE
 
-    # MappingProxyType prevents accidental mutation by callers.
-    return cast(dict[str, Any], MappingProxyType(_JWKS_CACHE))
+    return _JWKS_CACHE
 
 
 async def get_jwt_token(

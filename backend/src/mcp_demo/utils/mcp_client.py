@@ -6,7 +6,7 @@ import requests
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 from fastmcp.client.logging import LogMessage
-from fastmcp.utilities.mcp_config import MCPConfig, RemoteMCPServer
+from fastmcp.mcp_config import MCPConfig, RemoteMCPServer
 from loguru import logger
 
 # Package Library
@@ -32,8 +32,6 @@ def get_bearer_auth_token(*, password: str, username: str) -> str:
     ------
     RuntimeError
         If the access token cannot be retrieved from the server.
-    ValueError
-        If the client_type is not 'docker' or 'local'.
     """
 
     url = "http://0.0.0.0:8000/auth/token"
@@ -55,6 +53,104 @@ def get_bearer_auth_token(*, password: str, username: str) -> str:
         )
 
     return token_data["access_token"]
+
+
+def get_oauth_token(*, password: str, username: str) -> str:
+    """Get the oauth token for the client.
+
+    Parameters
+    ----------
+    password
+        The password for the MCP client authentication.
+    username
+        The username for the MCP client authentication.
+
+    Returns
+    -------
+    str
+        The oauth token.
+
+    Raises
+    ------
+    RuntimeError
+        If the access token cannot be retrieved from the server.
+    """
+
+    url = "http://0.0.0.0:8000/client/get-client-token"
+    payload = {
+        "client_id": username,
+        "client_secret": password,
+        "grant_type": "client_credentials",
+        "scope": "read",
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    response = requests.post(url, data=payload, headers=headers, timeout=60)
+    if response.ok:
+        token_data = response.json()
+        assert "access_token" in token_data, "Access token not found in response."
+    else:
+        logger.error(f"Failed to retrieve access token: {response.text}")
+        raise RuntimeError(
+            f"Failed to retrieve access token from {url}. "
+            "Please check the server configuration."
+        )
+
+    return token_data["access_token"]
+
+
+def get_mcp_config_bauth(
+    *,
+    host: str,
+    include_external_servers: bool = False,
+    password: str,
+    port: int,
+    server_mount_path: str,
+    transport: str,
+    username: str,
+) -> MCPConfig:
+    """Get the local MCP client configuration with Bearer Authentication.
+
+    Parameters
+    ----------
+    host
+        The host address for the MCP client.
+    include_external_servers
+        If True, include external MCP servers in the configuration.
+    password
+        The password for the MCP client authentication.
+    port
+        The port number for the MCP client.
+    server_mount_path
+        The mount path for the MCP server.
+    transport
+        The transport type for the MCP client.
+    username
+        The username for the MCP client authentication.
+
+    Returns
+    -------
+    MCPConfig
+        A configuration object for the MCP client, containing the server information
+        and authentication details.
+    """
+
+    access_token = get_bearer_auth_token(password=password, username=username)
+    server_config = {
+        "main_server": RemoteMCPServer(
+            auth=BearerAuth(token=access_token),
+            transport=transport,
+            url=f"http://{host}:{port}/{server_mount_path}",
+        )
+    }
+    if include_external_servers:
+        server_config["external_server"] = RemoteMCPServer(
+            auth=None,
+            transport=Settings.EXTERNAL_FASTMCP_TRANSPORT,
+            url=f"http://{Settings.EXTERNAL_FASTMCP_HOST}:{Settings.EXTERNAL_FASTMCP_PORT}/{Settings.EXTERNAL_FASTMCP_MOUNT_PATH}",
+        )
+    mcp_config = MCPConfig(mcpServers=server_config)
+    logger.debug(f"{mcp_config = }")
+    return mcp_config
 
 
 def get_mcp_config_docker(
@@ -108,7 +204,7 @@ def get_mcp_config_docker(
     return mcp_config
 
 
-def get_mcp_config_local(
+def get_mcp_config_oauth(
     *,
     host: str,
     include_external_servers: bool = False,
@@ -118,7 +214,7 @@ def get_mcp_config_local(
     transport: str,
     username: str,
 ) -> MCPConfig:
-    """Get the local MCP client configuration.
+    """Get the local MCP client configuration with Open Authorization.
 
     Parameters
     ----------
@@ -144,10 +240,10 @@ def get_mcp_config_local(
         and authentication details.
     """
 
-    access_token = get_bearer_auth_token(password=password, username=username)
+    access_token = get_oauth_token(password=password, username=username)
     server_config = {
         "main_server": RemoteMCPServer(
-            auth=BearerAuth(token=access_token),
+            auth=access_token,
             transport=transport,
             url=f"http://{host}:{port}/{server_mount_path}",
         )
