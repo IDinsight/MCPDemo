@@ -9,12 +9,9 @@ refresh/consent flows), plus key discovery via JWKS.
 from typing import Any, Optional
 
 # Third Party Library
-import jwt
-
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from jose import JWTError, jwk
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,8 +22,8 @@ from mcp_demo.auth.utils import (
     ClientCredentialsRequestForm,
     get_cached_jwks,
     get_jwt_token,
-    load_jwks,
     sanitize_scopes,
+    validate_token_and_get_claims,
 )
 from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.utils import Oauth2ClientNotFoundError, verify_client
@@ -147,33 +144,18 @@ async def introspect_token(
 
     # 3.
     try:
-        header = jwt.get_unverified_header(token)
-        kid = header.get("kid")
-        assert kid
-        last_jwks = await load_jwks()
-        key = next(k for k in last_jwks["keys"] if k["kid"] == kid)
-        assert key
-        public_key = jwk.construct(key).to_pem().decode()
-        payload = jwt.decode(
-            token,
-            algorithms=[Settings.AUTH_JWK_ALGORITHM],
-            audience=Settings.AUTH_AUDIENCE,
-            key=public_key,
-            options=jwt_options,
-        )
-    except (AssertionError, KeyError, StopIteration, JWTError):
-        return IntrospectionResponse(active=False)
-    except jwt.exceptions.ExpiredSignatureError:
+        claims = await validate_token_and_get_claims(options=jwt_options, token=token)
+    except HTTPException:
         return IntrospectionResponse(active=False)
 
     # 4.
-    is_client = payload.get("gty") == "client_credentials"
+    is_client = claims.get("gty") == "client_credentials"
     response = {
         "active": True,
-        "client_id": payload["sub"] if is_client else None,
-        "exp": payload["exp"],
-        "scope": payload.get("scope", ""),
-        "sub": None if is_client else int(payload["sub"]),
+        "client_id": claims["sub"] if is_client else None,
+        "exp": claims["exp"],
+        "scope": claims.get("scope", ""),
+        "sub": None if is_client else int(claims["sub"]),
         "token_type": "access_token",
     }
 

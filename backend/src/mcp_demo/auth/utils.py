@@ -63,7 +63,7 @@ from copy import deepcopy
 from pathlib import Path
 from secrets import token_hex
 from threading import Lock
-from typing import Annotated, Any, AsyncIterator, cast
+from typing import Annotated, Any, AsyncIterator, Callable, Optional, cast
 
 # Third Party Library
 import jwt
@@ -74,7 +74,7 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     load_pem_public_key,
 )
-from fastapi import Depends, Form, HTTPException, status
+from fastapi import Depends, Form, HTTPException, Security, status
 from fastapi.security import OAuth2PasswordBearer
 from filelock import FileLock
 from jose import JWTError, jwk
@@ -751,6 +751,65 @@ async def process_lock() -> AsyncIterator[None]:
         _LOCK.release()
 
 
+def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
+    """Decorator to enforce required scopes for a FastAPI route.
+
+    This decorator checks if the JWT token provided in the request has the required
+    scopes. If the token is valid and contains the required scopes, the request is
+    allowed to proceed. If the token is invalid or does not have the required scopes,
+    it raises an HTTPException with a 403 Forbidden status code.
+
+    Parameters
+    ----------
+    required_scopes
+        A set of scopes that the JWT token must contain for the request to be allowed.
+        If the token does not have these scopes, an HTTPException is raised.
+
+    Returns
+    -------
+    Callable[..., Any]
+        A FastAPI security dependency that can be used in route definitions to enforce
+        the required scopes.
+    """
+
+    async def scope_checker(token: str = Depends(oauth2_scheme)) -> dict[str, Any]:
+        """Check if the token has the required scopes.
+
+        This function decodes the JWT token, validates it, and checks if the token
+        contains the required scopes. If the token is invalid or does not have the
+        required scopes, it raises an HTTPException.
+
+        Parameters
+        ----------
+        token
+            The JWT token to validate and check for scopes.
+
+        Returns
+        -------
+        dict[str, Any]
+            The decoded JWT claims if the token is valid and has the required scopes.
+
+        Raises
+        ------
+        HTTPException
+            If the token is invalid or does not have the required scopes. This exception
+            will have a status code of 403 (Forbidden) if the token does not have the
+            required scopes.
+        """
+
+        claims = await validate_token_and_get_claims(token=token)
+        token_scopes = set(claims.get("scope", []))
+
+        if not required_scopes <= token_scopes:
+            raise HTTPException(
+                detail="Insufficient scope", status_code=status.HTTP_403_FORBIDDEN
+            )
+
+        return claims
+
+    return Security(scope_checker, scopes=list(required_scopes))
+
+
 async def rotate_keys(
     *,
     jwks_fn: str = AUTH_JWKS_FN,
@@ -1027,3 +1086,60 @@ def save_keypair(
     atomic_write(data=public_pem, target_fp=public_key_fp, mode="wb", perm=0o640)
 
     return private_key_fp, public_key_fp
+
+
+async def validate_token_and_get_claims(
+    *, options: Optional[dict[str, Any]] = None, token: str
+) -> dict[str, Any]:
+    """Validate a JWT token and return its claims.
+
+    This function decodes the JWT token, verifies its signature, checks its claims
+    (like audience, issuer, and expiration), and returns the payload if valid.
+
+    Parameters
+    ----------
+    options
+        Optional additional options for the JWT decoding process. This can include
+        settings like `verify_signature`, `verify_aud`, etc. If not provided, defaults
+        to verifying all standard claims.
+    token
+        The JWT token to decode and verify.
+
+    Returns
+    -------
+    dict[str, Any]
+        The decoded JWT payload if the token is valid.
+
+    Raises
+    ------
+    HTTPException
+        If the token is invalid, expired, or does not contain the required claims.
+    """
+
+    try:
+        header = jwt.get_unverified_header(token)
+        kid = header.get("kid")
+        assert kid
+        last_jwks = await load_jwks()
+        key = next(k for k in last_jwks["keys"] if k["kid"] == kid)
+        assert key
+        public_key = jwk.construct(key).to_pem().decode()
+        payload = jwt.decode(
+            token,
+            algorithms=[Settings.AUTH_JWK_ALGORITHM],
+            audience=Settings.AUTH_AUDIENCE,
+            key=public_key,
+            options=options,
+        )
+    except (
+        AssertionError,
+        KeyError,
+        StopIteration,
+        JWTError,
+        jwt.exceptions.ExpiredSignatureError,
+    ) as exc:
+        raise HTTPException(
+            detail="Invalid or expired token", status_code=status.HTTP_401_UNAUTHORIZED
+        ) from exc
+
+    return payload
