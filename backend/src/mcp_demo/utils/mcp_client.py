@@ -42,8 +42,10 @@ def get_access_token(*, auth_type: str = "bearer", password: str, username: str)
     match auth_type:
         case "bearer":
             payload = {
+                "client_id": username,
+                "client_secret": password,
+                "grant_type": "password",
                 "password": password,
-                "scope": "read",
                 "username": username,
             }
         case "oauth":
@@ -51,7 +53,8 @@ def get_access_token(*, auth_type: str = "bearer", password: str, username: str)
                 "client_id": username,
                 "client_secret": password,
                 "grant_type": "client_credentials",
-                "scope": "read",
+                "password": password,
+                "username": username,
             }
         case _:
             raise ValueError(

@@ -101,6 +101,7 @@ async def _run_client(
         ),
     )
     server_prefix = "main_server_" if include_external_servers else ""
+    resource_prefix = f"{server_prefix}/" if include_external_servers else ""
     async with client:
         logger.success(f"MCP client connection status: {client.is_connected()}")
 
@@ -162,16 +163,14 @@ async def _run_client(
             logger.error(f"Calling add_positives_only: {e}\n")
 
         # Read main server resources.
-        data_resource = await client.read_resource(
-            f"data://{server_prefix.rstrip('_')}/3"
-        )
+        data_resource = await client.read_resource(f"data://{resource_prefix}3")
         logger.debug(f"{data_resource = }")
         assert isinstance(data_resource[0], TextResourceContents)
         data_resource_text = json.loads(data_resource[0].text)
         logger.info(f"{data_resource_text = }\n")
 
         search_resource = await client.read_resource(
-            f"search://{server_prefix.rstrip('_')}/foobar"
+            f"search://{resource_prefix}foobar"
         )
         assert isinstance(search_resource[0], TextResourceContents)
         search_resource_text = json.loads(search_resource[0].text)
@@ -179,14 +178,14 @@ async def _run_client(
 
         # Read main server resource templates.
         lookup_user_email = await client.read_resource(
-            f"users://{server_prefix.rstrip('_')}/email/example@gmail.com"
+            f"users://{resource_prefix}email/example@gmail.com"
         )
         assert isinstance(lookup_user_email[0], TextResourceContents)
         lookup_user_email_text = lookup_user_email[0].text
         logger.info(f"{lookup_user_email_text = }\n")
 
         lookup_user_name = await client.read_resource(
-            f"users://{server_prefix.rstrip('_')}/name/foo"
+            f"users://{resource_prefix}name/foo"
         )
         assert isinstance(lookup_user_name[0], TextResourceContents)
         lookup_user_name_text = lookup_user_name[0].text

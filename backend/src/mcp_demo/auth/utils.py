@@ -126,13 +126,13 @@ class ClientCredentialsRequestForm:
     def __init__(
         self,
         *,
-        client_id: str | None = Form(..., min_length=1),
-        client_secret: str | None = Form(..., min_length=1),
+        client_id: str | None = Form(None, min_length=1),
+        client_secret: str | None = Form(None, min_length=1),
         grant_type: str = Form(
             default="client_credentials",
             regex="^(client_credentials|password)$",
         ),
-        password: str | None = Form(..., min_length=1),
+        password: str | None = Form(None, min_length=1),
         scope: str = Form(default=""),
         username: str | None = Form(None, min_length=1),
     ) -> None:
