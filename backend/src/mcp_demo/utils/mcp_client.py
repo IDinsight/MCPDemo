@@ -13,53 +13,13 @@ from loguru import logger
 from mcp_demo.config import Settings
 
 
-def get_bearer_auth_token(*, password: str, username: str) -> str:
-    """Get the bearer authentication token for the client.
+def get_access_token(*, auth_type: str = "bearer", password: str, username: str) -> str:
+    """Get the access token for the client.
 
     Parameters
     ----------
-    password
-        The password for the MCP client authentication.
-    username
-        The username for the MCP client authentication.
-
-    Returns
-    -------
-    str
-        The bearer authentication token.
-
-    Raises
-    ------
-    RuntimeError
-        If the access token cannot be retrieved from the server.
-    """
-
-    url = "http://0.0.0.0:8000/auth/token"
-    payload = {
-        "password": password,
-        "scope": "read",
-        "username": username,
-    }
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    response = requests.post(url, data=payload, headers=headers, timeout=60)
-    if response.ok:
-        token_data = response.json()
-        assert "access_token" in token_data, "Access token not found in response."
-    else:
-        logger.error(f"Failed to retrieve access token: {response.text}")
-        raise RuntimeError(
-            f"Failed to retrieve access token from {url}. "
-            "Please check the server configuration."
-        )
-
-    return token_data["access_token"]
-
-
-def get_oauth_token(*, password: str, username: str) -> str:
-    """Get the oauth token for the client.
-
-    Parameters
-    ----------
+    auth_type
+        The type of authentication to use. Options are "bearer" or "oauth".
     password
         The password for the MCP client authentication.
     username
@@ -74,15 +34,30 @@ def get_oauth_token(*, password: str, username: str) -> str:
     ------
     RuntimeError
         If the access token cannot be retrieved from the server.
+    ValueError
+        If an unsupported authentication type is provided.
     """
 
-    url = "http://0.0.0.0:8000/client/get-client-token"
-    payload = {
-        "client_id": username,
-        "client_secret": password,
-        "grant_type": "client_credentials",
-        "scope": "read",
-    }
+    url = "http://0.0.0.0:8000/auth/token"
+    match auth_type:
+        case "bearer":
+            payload = {
+                "password": password,
+                "scope": "read",
+                "username": username,
+            }
+        case "oauth":
+            payload = {
+                "client_id": username,
+                "client_secret": password,
+                "grant_type": "client_credentials",
+                "scope": "read",
+            }
+        case _:
+            raise ValueError(
+                f"Unsupported authentication type: {auth_type}. "
+                f"Valid options are 'bearer' or 'oauth'."
+            )
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     response = requests.post(url, data=payload, headers=headers, timeout=60)
     if response.ok:
@@ -98,8 +73,9 @@ def get_oauth_token(*, password: str, username: str) -> str:
     return token_data["access_token"]
 
 
-def get_mcp_config_bauth(
+def get_mcp_config(
     *,
+    auth_type: str,
     host: str,
     include_external_servers: bool = False,
     password: str,
@@ -112,62 +88,12 @@ def get_mcp_config_bauth(
 
     Parameters
     ----------
+    auth_type
+        The type of authentication to use. Options are "bearer" or "oauth".
     host
         The host address for the MCP client.
     include_external_servers
         If True, include external MCP servers in the configuration.
-    password
-        The password for the MCP client authentication.
-    port
-        The port number for the MCP client.
-    server_mount_path
-        The mount path for the MCP server.
-    transport
-        The transport type for the MCP client.
-    username
-        The username for the MCP client authentication.
-
-    Returns
-    -------
-    MCPConfig
-        A configuration object for the MCP client, containing the server information
-        and authentication details.
-    """
-
-    access_token = get_bearer_auth_token(password=password, username=username)
-    server_config = {
-        "main_server": RemoteMCPServer(
-            auth=BearerAuth(token=access_token),
-            transport=transport,
-            url=f"http://{host}:{port}/{server_mount_path}",
-        )
-    }
-    if include_external_servers:
-        server_config["external_server"] = RemoteMCPServer(
-            auth=None,
-            transport=Settings.EXTERNAL_FASTMCP_TRANSPORT,
-            url=f"http://{Settings.EXTERNAL_FASTMCP_HOST}:{Settings.EXTERNAL_FASTMCP_PORT}/{Settings.EXTERNAL_FASTMCP_MOUNT_PATH}",
-        )
-    mcp_config = MCPConfig(mcpServers=server_config)
-    logger.debug(f"{mcp_config = }")
-    return mcp_config
-
-
-def get_mcp_config_docker(
-    *,
-    host: str,
-    password: str,
-    port: int,
-    server_mount_path: str,
-    transport: str,
-    username: str,
-) -> MCPConfig:
-    """Get the docker MCP client configuration.
-
-    Parameters
-    ----------
-    host
-        The host address for the MCP client.
     password
         The password for the MCP client authentication.
     port
@@ -187,63 +113,22 @@ def get_mcp_config_docker(
 
     Raises
     ------
-    RuntimeError
-        If the access token cannot be retrieved from the server.
+    ValueError
+        If an unsupported authentication type is provided.
     """
 
-    access_token = get_bearer_auth_token(password=password, username=username)
+    if auth_type not in ["bearer", "oauth"]:
+        raise ValueError(
+            f"Unsupported authentication type: {auth_type}. "
+            f"Valid options are 'bearer' or 'oauth'."
+        )
+
+    access_token = get_access_token(
+        auth_type=auth_type, password=password, username=username
+    )
     server_config = {
         "main_server": RemoteMCPServer(
             auth=BearerAuth(token=access_token),
-            transport=transport,
-            url=f"http://{host}:{port}/{server_mount_path}",
-        )
-    }
-    mcp_config = MCPConfig(mcpServers=server_config)
-    logger.debug(f"{mcp_config = }")
-    return mcp_config
-
-
-def get_mcp_config_oauth(
-    *,
-    host: str,
-    include_external_servers: bool = False,
-    password: str,
-    port: int,
-    server_mount_path: str,
-    transport: str,
-    username: str,
-) -> MCPConfig:
-    """Get the local MCP client configuration with Open Authorization.
-
-    Parameters
-    ----------
-    host
-        The host address for the MCP client.
-    include_external_servers
-        If True, include external MCP servers in the configuration.
-    password
-        The password for the MCP client authentication.
-    port
-        The port number for the MCP client.
-    server_mount_path
-        The mount path for the MCP server.
-    transport
-        The transport type for the MCP client.
-    username
-        The username for the MCP client authentication.
-
-    Returns
-    -------
-    MCPConfig
-        A configuration object for the MCP client, containing the server information
-        and authentication details.
-    """
-
-    access_token = get_oauth_token(password=password, username=username)
-    server_config = {
-        "main_server": RemoteMCPServer(
-            auth=access_token,
             transport=transport,
             url=f"http://{host}:{port}/{server_mount_path}",
         )

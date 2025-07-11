@@ -3,10 +3,6 @@
 From the backend directory of this project, this entry point can be invoked from the
 command line via:
 
-python -m src.mcp_demo.entries.fastapi_app
-
-or
-
 python src/mcp_demo/entries/fastapi_app.py
 """
 

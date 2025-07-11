@@ -126,8 +126,8 @@ class ClientCredentialsRequestForm:
     def __init__(
         self,
         *,
-        client_id: str = Form(..., min_length=1),
-        client_secret: str = Form(..., min_length=1),
+        client_id: str | None = Form(..., min_length=1),
+        client_secret: str | None = Form(..., min_length=1),
         grant_type: str = Form(
             default="client_credentials",
             regex="^(client_credentials|password)$",
@@ -155,7 +155,27 @@ class ClientCredentialsRequestForm:
         username
             The username of the user for password grant type. Optional, only used for
             password grant.
+
+        Raises
+        ------
+        ValueError
+            If the required fields for the specified grant type are not provided.
         """
+
+        match grant_type:
+            case "client_credentials":
+                assert (
+                    client_id and client_secret
+                ), "client_id and client_secret must be provided for client_credentials"
+            case "password":
+                assert (
+                    username and password
+                ), "username and password must be provided for password grant"
+            case _:
+                raise ValueError(
+                    f"Unsupported grant_type: {grant_type}. "
+                    f"Valid options are: 'client_credentials' or 'password'."
+                )
 
         self.client_id = client_id
         self.client_secret = client_secret

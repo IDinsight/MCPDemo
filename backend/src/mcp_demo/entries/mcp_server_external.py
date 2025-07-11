@@ -3,10 +3,6 @@
 From the backend directory of this project, this entry point can be invoked from the
 command line via:
 
-python -m src.mcp_demo.entries.mcp_server_external
-
-or
-
 python src/mcp_demo/entries/mcp_server_external.py
 """
 
