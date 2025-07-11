@@ -14,6 +14,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
+from mcp_demo.auth.utils import require_scopes
 from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.schemas import (
     OAuth2ClientCreate,
@@ -35,6 +36,29 @@ TAG_METADATA = {"description": "Manages clients", "name": "Client"}
 router = APIRouter(prefix="/client", tags=[TAG_METADATA["name"]])
 
 limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
+
+
+@router.get("/admin-panel")
+async def admin_view(
+    claims: dict = require_scopes(required_scopes={"admin"}),  # pylint: disable=W0613
+) -> dict[str, str]:
+    """Admin panel view for users with admin scope.
+
+    This endpoint is protected and can only be accessed by users with the 'admin' scope.
+    It returns a simple message indicating that the user has access to the admin panel.
+
+    Parameters
+    ----------
+    claims
+        The claims of the authenticated user, used to verify scopes.
+
+    Returns
+    -------
+    dict[str, str]
+        A message indicating access to the admin panel.
+    """
+
+    return {"message": "Welcome to the admin panel!"}
 
 
 @router.post(

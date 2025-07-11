@@ -797,7 +797,11 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
         """
 
         claims = await validate_token_and_get_claims(token=token)
-        token_scopes = set(claims.get("scope", []))
+        token_scopes = claims.get("scope", "")
+        if isinstance(token_scopes, str):
+            token_scopes = {token_scopes}
+        elif isinstance(token_scopes, list):
+            token_scopes = set(token_scopes)
 
         if not required_scopes <= token_scopes:
             raise HTTPException(
