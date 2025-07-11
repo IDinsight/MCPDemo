@@ -5,24 +5,35 @@ providing a lightweight OAuth2 “password grant” token-issuing endpoint (bypa
 refresh/consent flows), plus key discovery via JWKS.
 """
 
+# Standard Library
+from typing import Any, Optional
+
 # Third Party Library
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+import jwt
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from jose import JWTError, jwk
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
+from mcp_demo.auth.schemas import IntrospectionResponse
 from mcp_demo.auth.utils import (
     ClientCredentialsRequestForm,
     get_cached_jwks,
     get_jwt_token,
+    load_jwks,
     sanitize_scopes,
 )
-from mcp_demo.clients.utils import verify_client
+from mcp_demo.clients.models import Oauth2ClientDB
+from mcp_demo.clients.utils import Oauth2ClientNotFoundError, verify_client
 from mcp_demo.config import Settings
 from mcp_demo.schemas import TokenResponse
-from mcp_demo.users.utils import verify_user
+from mcp_demo.users.models import UserDB
+from mcp_demo.users.utils import UserNotFoundError, verify_user
 from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.rate_limit import (
     is_locked_out,
@@ -36,6 +47,7 @@ TAG_METADATA = {
 }
 router = APIRouter(prefix="/auth", tags=[TAG_METADATA["name"]])
 
+basic_auth = HTTPBasic(auto_error=False)  # RFC 7662 requires auth but we handle error
 limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
 
 
@@ -64,6 +76,115 @@ async def get_jwks() -> JSONResponse:
     """
 
     return JSONResponse(await get_cached_jwks())
+
+
+@router.post("/introspect", response_model=IntrospectionResponse)
+@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+async def introspect_token(
+    request: Request,  # pylint: disable=W0613
+    asession: AsyncSession = Depends(get_async_session),
+    token: str = Form(..., description="Access or refresh token to introspect"),
+    credentials: HTTPBasicCredentials | None = Depends(basic_auth),
+) -> IntrospectionResponse:
+    """RFC 7662-style token introspection.
+
+    *Authenticated* callers can verify whether a JWT is active and view the scopes
+    associated with its subject (user or client).
+
+    The process is as follows:
+
+    1. The caller must provide HTTP Basic credentials to authenticate.
+    2. The caller's identity is verified against the database:
+        - If a client ID is provided, it must match a registered client with a valid
+            secret.
+        - If a username is provided, it must match a registered user with a valid
+            password.
+    3. The JWT is decoded and validated:
+        - Signature, expiry, and replay (jti) checks are performed.
+    4. The introspection response is built, indicating whether the token is active,
+        its expiry, scopes, and subject/client ID.
+    5. The response is checked to ensure the token belongs to the authenticated client
+        or user:
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object, used to access the requested scopes. This is needed
+        for SlowAPI rate limiting.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    token
+        The JWT token to introspect, provided as a form field.
+    credentials
+        Optional HTTP Basic credentials for client authentication. If provided, the
+        caller must be a registered client with a valid secret.
+
+    Returns
+    -------
+    IntrospectionResponse
+        An introspection response indicating whether the token is active, its scopes,
+        and other metadata.
+
+    Raises
+    ------
+    HTTPException
+        If the caller is not authenticated, or if the token is invalid or expired.
+        If the caller's credentials are invalid or not found in the database.
+        If the token cannot be decoded or verified.
+        If the token does not belong to the authenticated client or user.
+    """
+
+    # 1.
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Basic auth required"
+        )
+
+    # 2.
+    caller_db, jwt_options = await check_introspection_call(
+        asession=asession, credentials=credentials
+    )
+
+    # 3.
+    try:
+        header = jwt.get_unverified_header(token)
+        kid = header.get("kid")
+        assert kid
+        last_jwks = await load_jwks()
+        key = next(k for k in last_jwks["keys"] if k["kid"] == kid)
+        assert key
+        public_key = jwk.construct(key).to_pem().decode()
+        payload = jwt.decode(
+            token,
+            algorithms=[Settings.AUTH_JWK_ALGORITHM],
+            audience=Settings.AUTH_AUDIENCE,
+            key=public_key,
+            options=jwt_options,
+        )
+    except (AssertionError, KeyError, StopIteration, JWTError):
+        return IntrospectionResponse(active=False)
+    except jwt.exceptions.ExpiredSignatureError:
+        return IntrospectionResponse(active=False)
+
+    # 4.
+    is_client = payload.get("gty") == "client_credentials"
+    response = {
+        "active": True,
+        "client_id": payload["sub"] if is_client else None,
+        "exp": payload["exp"],
+        "scope": payload.get("scope", ""),
+        "sub": None if is_client else int(payload["sub"]),
+        "token_type": "access_token",
+    }
+
+    # 5.
+    if (
+        isinstance(caller_db, Oauth2ClientDB)
+        and response["client_id"] != caller_db.client_id
+    ) or (isinstance(caller_db, UserDB) and response["sub"] != caller_db.user_id):
+        return IntrospectionResponse(active=False)
+
+    return IntrospectionResponse(**response)
 
 
 @router.post(
@@ -144,6 +265,7 @@ async def token_endpoint(
             )
 
             token = await get_jwt_token(
+                grant_type="client_credentials",
                 redis_client=redis_client,
                 scopes=sanitize_scopes(requested_scopes=client_db.scopes),
                 sub=client_db.client_id,
@@ -178,6 +300,7 @@ async def token_endpoint(
             await reset_failed_login(ip=ip, redis_client=redis_client, user=username)
 
             token = await get_jwt_token(
+                grant_type="password",
                 passphrase=Settings.AUTH_RSA_PASSPHRASE.get_secret_value(),
                 redis_client=redis_client,
                 scopes=sanitize_scopes(
@@ -196,3 +319,74 @@ async def token_endpoint(
                 detail=f"Unsupported grant type: {form.grant_type}.",
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
+
+
+async def check_introspection_call(
+    *, asession: AsyncSession, credentials: HTTPBasicCredentials
+) -> tuple[Oauth2ClientDB | UserDB, dict[str, Any]]:
+    """Check if the caller is authenticated for introspection.
+
+    This function attempts to authenticate the caller as either a client or a user. If
+    the caller is authenticated, it returns the JWT options to use for decoding. If the
+    caller is not authenticated, it raises an HTTPException.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    credentials
+        The HTTP Basic credentials provided by the caller.
+
+    Returns
+    -------
+    tuple[Oauth2ClientDB | UserDB, dict[str, Any]]
+        A tuple containing the authenticated caller's database object and JWT options.
+
+    Raises
+    ------
+    HTTPException
+        If the caller is not authenticated, or if the credentials are invalid.
+    """
+
+    caller_db: Optional[Oauth2ClientDB | UserDB] = None
+    options: dict[str, Any] = {}
+
+    try:  # Try to authenticate as a client first.
+        client_db = await verify_client(
+            asession=asession,
+            client_id=credentials.username,
+            client_secret=credentials.password,
+        )
+        if client_db:
+            caller_db = client_db
+            options = {
+                "verify_aud": True,
+                "verify_exp": True,
+                "verify_iat": True,
+                "verify_iss": True,
+                "verify_nbf": True,
+            }
+    except Oauth2ClientNotFoundError:
+        pass
+
+    if not caller_db:
+        try:  # Try to authenticate as a user second.
+            user_db = await verify_user(
+                asession=asession,
+                password=credentials.password,
+                username=credentials.username,
+            )
+            if user_db:
+                caller_db = user_db
+                options = {"require": ["exp", "sub"]}
+        except UserNotFoundError:
+            pass
+
+    # Fail if neither authenticated.
+    if not caller_db:
+        raise HTTPException(
+            detail="Invalid credentials",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    return caller_db, options

@@ -190,11 +190,11 @@ async def get_current_client(
 
     payload = await _verify_caller(
         options={
-            "verify_exp": True,
-            "verify_nbf": True,
-            "verify_iat": True,
             "verify_aud": True,
+            "verify_exp": True,
+            "verify_iat": True,
             "verify_iss": True,
+            "verify_nbf": True,
         },
         redis_client=redis_client,
         required_scopes=set(security_scopes.scopes),

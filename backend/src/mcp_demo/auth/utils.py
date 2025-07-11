@@ -63,7 +63,7 @@ from copy import deepcopy
 from pathlib import Path
 from secrets import token_hex
 from threading import Lock
-from typing import Annotated, Any, AsyncIterator, Optional, cast
+from typing import Annotated, Any, AsyncIterator, cast
 
 # Third Party Library
 import jwt
@@ -211,7 +211,7 @@ def _set_cache(*, mtime: float | None, new_jwks: dict[str, Any]) -> None:
 
 async def _verify_caller(
     *,
-    options: Optional[dict[str, Any]] = None,
+    options: dict[str, Any],
     redis_client: Annotated[aioredis.Redis, Depends(get_redis_client)],
     required_scopes: set[str],
     token: Annotated[str, Depends(oauth2_scheme)],
@@ -252,13 +252,6 @@ async def _verify_caller(
         headers={"WWW-Authenticate": "Bearer"},
         status_code=status.HTTP_401_UNAUTHORIZED,
     )
-    options = options or {
-        "verify_aud": True,
-        "verify_exp": True,
-        "verify_nbf": True,
-        "verify_iat": True,
-        "verify_iss": True,
-    }
 
     try:
         header = jwt.get_unverified_header(token)
@@ -371,6 +364,7 @@ async def get_cached_jwks() -> dict[str, Any]:
 
 async def get_jwt_token(
     *,
+    grant_type: str,
     jwks_fn: str = AUTH_JWKS_FN,
     passphrase: str | None = None,
     redis_client: aioredis.Redis,
@@ -398,6 +392,8 @@ async def get_jwt_token(
 
     Parameters
     ----------
+    grant_type
+        The OAuth2 grant type, must be 'client_credentials' or 'password'.
     jwks_fn
         The filename for the JWKS (JSON Web Key Set) file. This is only used for
         generating a new key if the JWKS file is empty.
@@ -447,6 +443,7 @@ async def get_jwt_token(
             "exp": now + AUTH_TOKEN_TTL,
             "iat": now,
             "iss": AUTH_TOKEN_ISSUER,
+            "gty": grant_type,
             "jti": jti,
             "nbf": now - 30,
             "scope": " ".join(scopes),
