@@ -1,19 +1,27 @@
-"""This module contains utilities for clients."""
+"""This module contains utilities for managaing OAuth2 clients and credentials."""
+
+# Standard Library
+from typing import Any
 
 # Third Party Library
-from fastapi import Form, HTTPException, status
+from fastapi import Depends, HTTPException, status
+from fastapi.security import SecurityScopes
+from loguru import logger
+from redis import asyncio as aioredis
 from sqlalchemy import select
+from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
-from mcp_demo.clients.models import ServiceClientDB
-from mcp_demo.clients.schemas import ServiceClientCreate
-from mcp_demo.config import Settings
-from mcp_demo.utils.general import generate_hash, verify_hash
+from mcp_demo.auth.utils import _verify_caller, oauth2_scheme
+from mcp_demo.clients.models import Oauth2ClientDB
+from mcp_demo.clients.schemas import OAuth2ClientCreate
+from mcp_demo.utils.database import get_async_session
+from mcp_demo.utils.general import generate_hash, get_redis_client, verify_hash
 
 
-class ClientAlreadyExistsError(Exception):
-    """Custom exception raised when a client already exists in the database."""
+class Oauth2ClientNotFoundError(Exception):
+    """Custom exception raised when a client is not found in the database."""
 
     def __init__(self, *, error_msg: str) -> None:
         """
@@ -24,50 +32,31 @@ class ClientAlreadyExistsError(Exception):
             The error message.
         """
 
-        super().__init__(f"Client already exists: {error_msg}")
+        super().__init__(f"Client not found: {error_msg}")
 
         self.error_msg = error_msg
 
 
-class OAuth2ClientCredentialsRequestForm:
-    """Form parameters for the OAuth2 ‘client_credentials’ grant.
+class Oauth2ClientDBClientAlreadyExistsError(Exception):
+    """Custom exception raised when an OAuth2 client already exists in the database."""
 
-    NB: FastAPI does not provide this out-of-the-box.
-    """
-
-    def __init__(
-        self,
-        grant_type: str = Form(
-            default="client_credentials", regex="client_credentials"
-        ),
-        scope: str = Form(default=""),
-        client_id: str = Form(..., min_length=1),
-        client_secret: str = Form(..., min_length=1),
-    ) -> None:
+    def __init__(self, *, error_msg: str) -> None:
         """
 
         Parameters
         ----------
-        grant_type
-            The OAuth2 grant type, must be 'client_credentials'.
-        scope
-            Space-separated list of scopes requested by the client.
-        client_id
-            The client identifier issued to the client during registration.
-        client_secret
-            The client secret issued to the client during registration. This is used to
-            authenticate the client and should be kept confidential.
+        error_msg
+            A human-readable description of the error condition.
         """
 
-        self.grant_type = grant_type
-        self.scopes: list[str] = scope.split()
-        self.client_id = client_id
-        self.client_secret = client_secret
+        super().__init__(f"OAuth2 client already exists: {error_msg}")
+
+        self.error_msg = error_msg
 
 
 async def check_if_client_exists(
-    *, asession: AsyncSession, client: ServiceClientCreate
-) -> ServiceClientDB | None:
+    *, asession: AsyncSession, client: OAuth2ClientCreate
+) -> Oauth2ClientDB | None:
     """Check if a client exists in the database.
 
     Parameters
@@ -79,39 +68,161 @@ async def check_if_client_exists(
 
     Returns
     -------
-    ServiceClientDB | None
-        The ServiceClientDB instance if the client exists, otherwise `None`.
+    Oauth2ClientDB | None
+        The `Oauth2ClientDB` instance if the client exists, otherwise `None`.
     """
 
-    stmt = select(ServiceClientDB).where(ServiceClientDB.client_id == client.client_id)
+    stmt = select(Oauth2ClientDB).where(Oauth2ClientDB.client_id == client.client_id)
     result = await asession.execute(stmt)
     client_db = result.scalar_one_or_none()
     return client_db
 
 
-def get_service_scopes(*, client_db: ServiceClientDB) -> list[str]:
-    """Restrict scopes to what the service is allowed — no self-escalation.
+async def check_if_clients_exist(*, asession: AsyncSession) -> bool:
+    """Check if clients exist in the database.
 
     Parameters
     ----------
-    client_db
-        The ServiceClientDB instance representing the client for which scopes are
-        being retrieved.
+    asession
+        The SQLAlchemy async session to use for all database connections.
 
     Returns
     -------
-    list[str]
-        A list of scopes that the client is allowed to use, filtered against the
-        allowed scopes defined in the settings.
+    bool
+        Specifies whether clients exists in the database.
     """
 
-    return list(set(client_db.scopes) & Settings.AUTH_ALLOWED_SCOPES)
+    stmt = select(Oauth2ClientDB.client_id).limit(1)
+    result = await asession.scalars(stmt)
+    return result.first() is not None
+
+
+async def delete_client_from_db(*, asession: AsyncSession, client_id: str) -> None:
+    """Delete a client from the database.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    client_id
+        The unique identifier of the client to delete.
+    """
+
+    stmt = select(Oauth2ClientDB).where(Oauth2ClientDB.client_id == client_id)
+    result = await asession.execute(stmt)
+    client_db = result.scalar_one_or_none()
+
+    if client_db is None:
+        logger.warning(f"Client ID does not exist: {client_id}")
+        return
+
+    await asession.delete(client_db)
+    await asession.commit()
+
+
+async def get_client_by_id(*, asession: AsyncSession, client_id: str) -> Oauth2ClientDB:
+    """Retrieve a client by client ID.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    client_id
+        The unique identifier of the client to retrieve.
+
+    Returns
+    -------
+    Oauth2ClientDB
+        The client object retrieved from the database.
+
+    Raises
+    ------
+    Oauth2ClientNotFoundError
+        If the client with the specified client ID does not exist.
+    """
+
+    stmt = select(Oauth2ClientDB).where(Oauth2ClientDB.client_id == client_id)
+    result = await asession.execute(stmt)
+
+    try:
+        client = result.scalar_one()
+        return client
+    except NoResultFound as err:
+        raise Oauth2ClientNotFoundError(
+            error_msg=f"Client ID does not exist: {client_id} "
+        ) from err
+
+
+async def get_current_client(
+    asession: AsyncSession = Depends(get_async_session),
+    redis_client: aioredis.Redis = Depends(get_redis_client),
+    security_scopes: SecurityScopes = SecurityScopes(),
+    token: str = Depends(oauth2_scheme),
+) -> Oauth2ClientDB:
+    """Authenticate a JWT issued via client credentials and return the matching
+    `Oauth2ClientDB`.
+
+    The token’s `sub` claim must equal the `client_id`. A revoked or replayed JTI is
+    rejected via Redis lookup.
+
+    Parameters
+    ----------
+    redis_client
+        The Redis client used to check the JTI (JWT ID) for replay attacks.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    security_scopes
+        The security scopes required for the operation, used to check if the token
+        has the necessary permissions.
+    token
+        The JWT token to decode and verify.
+
+    Returns
+    -------
+    Oauth2ClientDB
+        The client database object representing the authenticated client.
+
+    Raises
+    ------
+    HTTPException
+        If the client is not found or is inactive.
+    """
+
+    payload = await _verify_caller(
+        options={
+            "verify_exp": True,
+            "verify_nbf": True,
+            "verify_iat": True,
+            "verify_aud": True,
+            "verify_iss": True,
+        },
+        redis_client=redis_client,
+        required_scopes=set(security_scopes.scopes),
+        token=token,
+    )
+
+    try:
+        client_db = await get_client_by_id(asession=asession, client_id=payload["sub"])
+    except Oauth2ClientNotFoundError as exc:
+        raise HTTPException(
+            detail="Could not validate credentials",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+
+    if not client_db.is_active:
+        raise HTTPException(
+            detail="Could not validate credentials",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    return client_db
 
 
 async def save_client_to_db(
-    *, asession: AsyncSession, client: ServiceClientCreate
-) -> ServiceClientDB:
-    """Save a client in the database.
+    *, asession: AsyncSession, client: OAuth2ClientCreate
+) -> Oauth2ClientDB:
+    """Saves a new service client in the database and ensures that `client_id` is
+    unique and hashes the `client_secret`.
 
     Parameters
     ----------
@@ -122,23 +233,23 @@ async def save_client_to_db(
 
     Returns
     -------
-    ServiceClientDB
+    Oauth2ClientDB
         The client object saved in the database.
 
     Raises
     ------
-    ClientAlreadyExistsError
+    Oauth2ClientDBClientAlreadyExistsError
         If a client with the same client ID already exists in the database.
     """
 
     existing_client = await check_if_client_exists(asession=asession, client=client)
 
     if existing_client is not None:
-        raise ClientAlreadyExistsError(
-            error_msg=f"Client ID already exists: {existing_client.client_id}"
+        raise Oauth2ClientDBClientAlreadyExistsError(
+            error_msg=f"OAuth2 client ID already exists: {existing_client.client_id}"
         )
 
-    client_db = ServiceClientDB(
+    client_db = Oauth2ClientDB(
         client_id=client.client_id,
         is_active=client.is_active,
         scopes=list(set(client.scopes)),  # Dedup
@@ -152,10 +263,47 @@ async def save_client_to_db(
     return client_db
 
 
-async def verify_client_secret(
+async def update_client_in_db(
+    *,
+    asession: AsyncSession,
+    client: Oauth2ClientDB,
+    **kwargs: Any,
+) -> Oauth2ClientDB:
+    """Update a client in the database.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    client
+        The client object to update in the database.
+    kwargs
+        Additional keyword arguments to update the client object in the database.
+
+    Returns
+    -------
+    Oauth2ClientDB
+        The client object saved in the database after update.
+    """
+
+    client_db = Oauth2ClientDB(
+        client_id=client.client_id,
+        is_active=client.is_active,
+        scopes=client.scopes,
+        **kwargs,
+    )
+    client_db = await asession.merge(client_db)
+
+    await asession.commit()
+    await asession.refresh(client_db)
+
+    return client_db
+
+
+async def verify_client(
     *, asession: AsyncSession, client_id: str, client_secret: str
-) -> ServiceClientDB:
-    """Return the DB row IFF id exists, active, and secret matches.
+) -> Oauth2ClientDB | None:
+    """Verify client credentials.
 
     Parameters
     ----------
@@ -168,26 +316,37 @@ async def verify_client_secret(
 
     Returns
     -------
-    ServiceClientDB
-        The ServiceClientDB instance if the client ID and secret are valid.
-
-    Raises
-    ------
-    HTTPException
-        If the client ID does not exist, is inactive, or the client secret does not
-        match the stored hash.
+    Oauth2ClientDB | None
+        The ClientDB instance if the client ID and secret are valid; otherwise, `None`.
     """
 
-    stmt = select(ServiceClientDB).where(
-        ServiceClientDB.client_id == client_id, ServiceClientDB.is_active.is_(True)
+    try:
+        client_db = await get_client_by_id(asession=asession, client_id=client_id)
+    except Oauth2ClientNotFoundError:
+        return None
+
+    if not client_db.is_active:
+        return None
+
+    verified, hashed_secret = verify_hash(
+        text=client_secret, hashed=client_db.secret_hash
     )
-    result = await asession.execute(stmt)
-    row: ServiceClientDB | None = result.scalar_one_or_none()
 
-    if not row or not verify_hash(text=client_secret, hashed=str(row.secret_hash))[0]:
-        raise HTTPException(
-            detail="Invalid client credentials",
-            status_code=status.HTTP_401_UNAUTHORIZED,
-        )
+    if not verified:
+        return None
 
-    return row
+    if hashed_secret == client_db.secret_hash:
+        return client_db
+
+    # Update hashed secret.
+    client_db = await update_client_in_db(
+        asession=asession,
+        client=Oauth2ClientDB(
+            client_id=client_db.client_id,
+            is_active=client_db.is_active,
+            scopes=client_db.scopes,
+        ),
+        secret_hash=hashed_secret,
+    )
+
+    return client_db

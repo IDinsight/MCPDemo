@@ -7,15 +7,12 @@ from typing import Annotated
 import sqlalchemy
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordRequestForm
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
-from mcp_demo.auth.utils import get_jwt_token, sanitize_scopes
 from mcp_demo.config import Settings
-from mcp_demo.schemas import TokenResponse
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import (
     UserCreateWithPassword,
@@ -33,16 +30,10 @@ from mcp_demo.users.utils import (
     reset_user_password,
     save_user_to_db,
     verify_recovery_code,
-    verify_user,
 )
 from mcp_demo.utils.chat import AsyncChatSessionManager, get_chat_session_manager
 from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.general import generate_recovery_codes
-from mcp_demo.utils.rate_limit import (
-    is_locked_out,
-    record_failed_login,
-    reset_failed_login,
-)
 
 TAG_METADATA = {"description": "Manages users", "name": "User"}
 router = APIRouter(prefix="/user", tags=[TAG_METADATA["name"]])
@@ -50,85 +41,6 @@ router = APIRouter(prefix="/user", tags=[TAG_METADATA["name"]])
 limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
 
 REDIS_CACHE_PREFIX_CHAT = Settings.REDIS_CACHE_PREFIX_CHAT
-
-
-@router.post(
-    "/login",
-    description=(
-        "Authenticate with username/password and receive an RS256 JWT.\n\n"
-        "- **Request**: `application/x-www-form-urlencoded`\n"
-        "- **Response**: JSON with `access_token`, `token_type`, `expires_in`\n"
-        "- **Usage**: Header `Authorization: Bearer <token>` for subsequent requests"
-    ),
-    response_model=TokenResponse,
-    summary="Issue Bearer Token",
-)
-@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
-async def login(
-    request: Request,
-    asession: AsyncSession = Depends(get_async_session),
-    form: OAuth2PasswordRequestForm = Depends(),
-) -> TokenResponse:
-    """Issue a JWT token for the authenticated user.
-
-    Parameters
-    ----------
-    request
-        The FastAPI request object, used to access the requested scopes.
-    asession
-        The SQLAlchemy async session to use for all database connections.
-    form
-        The OAuth2 password request form.
-
-    Returns
-    -------
-    TokenResponse
-        The token response containing the access token, expiration time, and token type.
-
-    Raises
-    ------
-    HTTPException
-        If the user is locked out due to too many failed login attempts.
-        If the user credentials are invalid or the user does not exist.
-    """
-
-    assert request.client is not None, f"Request client is None: {request}"
-    ip = request.client.host
-    redis_client = request.app.state.redis
-    username = form.username
-
-    if await is_locked_out(ip=ip, redis_client=redis_client, user=username):
-        raise HTTPException(
-            detail="Too many failed login attempts. Try again later.",
-            status_code=status.HTTP_401_UNAUTHORIZED,
-        )
-
-    user_db = await verify_user(
-        asession=asession, password=form.password, username=username
-    )
-    if user_db is None:
-        await record_failed_login(ip=ip, redis_client=redis_client, user=username)
-        raise HTTPException(
-            detail="Too many failed login attempts. Try again later.",
-            status_code=status.HTTP_401_UNAUTHORIZED,
-        )
-
-    await reset_failed_login(ip=ip, redis_client=redis_client, user=username)
-
-    user_scopes = ["read", "write"]
-    if user_db.is_admin:
-        user_scopes.append("admin")
-
-    token = await get_jwt_token(
-        passphrase=Settings.AUTH_RSA_PASSPHRASE.get_secret_value(),
-        redis_client=redis_client,
-        scopes=sanitize_scopes(requested_scopes=user_scopes),
-        sub=str(user_db.user_id),
-    )
-
-    return TokenResponse(
-        access_token=token, expires_in=Settings.AUTH_TOKEN_TTL, token_type="bearer"
-    )
 
 
 @router.post("/register", response_model=UserCreateWithRecoveryCodes)

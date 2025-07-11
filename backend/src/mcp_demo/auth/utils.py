@@ -1,48 +1,56 @@
-"""This module contains authentication utilities.
+"""This module contains authentication utilities for key management and JWT token
+operations.
+
+This module provides core logic for managing signing keys and issuing RS256 JWT tokens
+consumed by FastMCP and other services that trust this auth service.
 
 This module houses *all* key-management and token-generation logic used by the
 authentication service and, indirectly, every other server that trusts its tokens
 (e.g., the FastMCP server).
 
-High-level flow
----------------
-1. First start-up
-   - `rotate_keys()` is invoked automatically by `get_jwt_token()` (via
-    `get_latest_private_key_and_kid()`) when `jwks.json` is empty. It generates a fresh
-    RSA-3072 key-pair, stores the private key (PKCS-8 + passphrase) in
-    `$PATHS_SECRETS_DIR`, publishes the public key in `jwks.json`, and primes the
-    in-memory JWKS cache.
+Overview
+--------
+
+1. First startup
+    - When `get_jwt_token()` (via `get_latest_private_key_and_kid()`) detects an empty
+        JWKS, it calls `rotate_keys()`, which:
+            - Generates an RSA‑3072 key pair.
+            - Saves the encrypted private and public keys to disk.
+            - Writes public keys into `jwks.json`.
+            - Updates the in-memory JWKS cache.
 2. Normal token issuance
-   - `routers.issue_token` calls `get_jwt_token()`:
-    2a. `get_latest_private_key_and_kid()` fetches the newest private key.
-    2b. A short-lived RS256 JWT is signed (`kid` header set).
-    2c. The JWT is returned to the caller.
-3. Key rotation (scheduled task or manual call)
-   - `rotate_keys()` generates a *new* key-pair, inserts its JWK at the head of
-   `jwks.json`, prunes keys beyond `AUTH_ROTATION_KEEP_LAST_N`, deletes stale PEM
-   files, and updates the global JWKS cache.
+    - `routers.issue_token` calls `get_jwt_token()`, which:
+        - Loads the latest private key.
+        - Creates a payload with `sub`, `scopes`, `jti`, `iat`, `exp`, etc.
+        - Signs the JWT with RS256 and the appropriate `kid`.
+        - Stores the `jti` in Redis with TTL = token lifetime.
+3. Key rotation (optional scheduled task)
+    - `rotate_keys()` generates a new key pair, prepends to `jwks.json`, prunes old
+        keys (keeping last N), deletes stale PEMs, and updates the in-memory cache.
 4. JWKS serving
-   - API route `/auth/jwks.json` simply calls `load_jwks()`. Other servers (e.g.,
-   FastMCP servers) periodically fetch this endpoint to verify future tokens.
+    - `/auth/jwks.json` endpoints call `load_jwks()` or `load_jwks_from_redis()` to
+        return the current JWKS in a cache-aware manner.
+
 
 Concurrency & Safety
 --------------------
-1. `process_lock()` wraps all file-system writes so multiple Uvicorn workers (or cron
-    jobs) cannot rotate keys concurrently.
-2. Atomic writes via `atomic_write()` guarantee that readers never observe partially
-    written files.
-3. In-memory cache (`_JWKS_CACHE` + `_JWKS_MTIME`) avoids repeated disk I/O and
-    re-parses while still noticing on-disk changes made by other processes.
+1. `process_lock()` uses a filesystem lock to prevent concurrent rotations.
+2. `atomic_write()` ensures atomic file updates.
+3. In-memory cache (`_JWKS_CACHE` + `_JWKS_MTIME`) prevents redundant I/O while
+    reflecting cross-process updates.
 
 Environment contracts
 ---------------------
-1. `$PATHS_SECRETS_DIR` (directory) must exist and be writable by the process.
-2. `Settings.*` values (issuer, audience, time-outs, etc.) drive defaults.
+1. `$PATHS_SECRETS_DIR` must exist and be writable.
+2. Relevant `Settings.*` values (e.g. issuer, audience) must be configured.
 
-All public helpers are asyncio-friendly; call them with `await` unless noted otherwise.
+All public functions are `async` and should be called with `await`.
 """
 
 # pylint: disable=W0603
+# Future Library
+from __future__ import annotations
+
 # Standard Library
 import asyncio
 import base64
@@ -55,7 +63,7 @@ from copy import deepcopy
 from pathlib import Path
 from secrets import token_hex
 from threading import Lock
-from typing import Any, AsyncIterator, cast
+from typing import Annotated, Any, AsyncIterator, Optional, cast
 
 # Third Party Library
 import jwt
@@ -66,13 +74,16 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     load_pem_public_key,
 )
+from fastapi import Depends, Form, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
 from filelock import FileLock
+from jose import JWTError, jwk
 from loguru import logger
 from redis import asyncio as aioredis
 
 # Package Library
 from mcp_demo.config import Settings
-from mcp_demo.utils.general import atomic_write, make_dir
+from mcp_demo.utils.general import atomic_write, get_redis_client, make_dir
 
 _JWKS_CACHE: dict[str, Any] | None = None  # In-memory copy
 _JWKS_MTIME: float | None = None  # Last os.stat mtime
@@ -95,6 +106,63 @@ AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
 AUTH_TOKEN_TTL = Settings.AUTH_TOKEN_TTL
 REDIS_CACHE_PREFIX_JTI = Settings.REDIS_CACHE_PREFIX_JTI
 REDIS_CACHE_PREFIX_JWKS_CURRENT = Settings.REDIS_CACHE_PREFIX_JWKS_CURRENT
+
+oauth2_scheme = OAuth2PasswordBearer(
+    scopes={
+        "admin": "Admin user with full permissions",
+        "read": "User with read permissions only.",
+        "write": "User with read and write permissions.",
+    },
+    tokenUrl="/auth/token",
+)
+
+
+class ClientCredentialsRequestForm:
+    """Form model supporting both 'client_credentials' and 'password' grant types.
+
+    NB: FastAPI’s built-in OAuth2 forms don’t support multi-grant flows.
+    """
+
+    def __init__(
+        self,
+        *,
+        client_id: str = Form(..., min_length=1),
+        client_secret: str = Form(..., min_length=1),
+        grant_type: str = Form(
+            default="client_credentials",
+            regex="^(client_credentials|password)$",
+        ),
+        password: str | None = Form(..., min_length=1),
+        scope: str = Form(default=""),
+        username: str | None = Form(None, min_length=1),
+    ) -> None:
+        """
+
+        Parameters
+        ----------
+        client_id
+            The client identifier issued to the client during registration.
+        client_secret
+            The client secret issued to the client during registration. This is used to
+            authenticate the client and should be kept confidential.
+        grant_type
+            The OAuth2 grant type, must be 'client_credentials'.
+        password
+            The password of the user for password grant type. Optional, only used for
+            password grant.
+        scope
+            Space-separated list of scopes requested by the client.
+        username
+            The username of the user for password grant type. Optional, only used for
+            password grant.
+        """
+
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.grant_type = grant_type
+        self.password = password
+        self.scopes: list[str] = scope.split()
+        self.username = username
 
 
 def _set_cache(*, mtime: float | None, new_jwks: dict[str, Any]) -> None:
@@ -119,6 +187,100 @@ def _set_cache(*, mtime: float | None, new_jwks: dict[str, Any]) -> None:
         # Never mutate the existing dict; just point to a fresh copy.
         _JWKS_CACHE = new_jwks
         _JWKS_MTIME = mtime
+
+
+async def _verify_caller(
+    *,
+    options: Optional[dict[str, Any]] = None,
+    redis_client: Annotated[aioredis.Redis, Depends(get_redis_client)],
+    required_scopes: set[str],
+    token: Annotated[str, Depends(oauth2_scheme)],
+) -> dict[str, Any]:
+    """Shared JWT verifier for **both** users and service-clients.
+
+    Parameters
+    ----------
+    options
+        Optional additional options for the JWT decoding process. This can include
+        settings like `verify_signature`, `verify_aud`, etc. If not provided, defaults
+        to verifying all standard claims.
+    redis_client
+        The Redis client used to check the JTI (JWT ID) for replay attacks.
+    required_scopes
+        The scopes required for the operation being performed. This is a set of
+        strings representing the scopes that the client must have in order to access
+        the requested resource or perform the action.
+    token
+        The JWT token to decode and verify.
+
+    Returns
+    -------
+    dict[str, Any]
+        The decoded JWT payload if the token is valid and contains the required scopes.
+
+    Raises
+    ------
+    HTTPException
+        If the token is invalid, expired, or does not contain the required scopes.
+        This exception will have a status code of 401 (Unauthorized) if the token
+        cannot be validated, or 403 (Forbidden) if the token does not have the
+        required scopes.
+    """
+
+    credentials_exception = HTTPException(
+        detail="Could not validate client credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+        status_code=status.HTTP_401_UNAUTHORIZED,
+    )
+    options = options or {
+        "verify_aud": True,
+        "verify_exp": True,
+        "verify_nbf": True,
+        "verify_iat": True,
+        "verify_iss": True,
+    }
+
+    try:
+        header = jwt.get_unverified_header(token)
+        kid = header.get("kid")
+        if not kid:
+            raise credentials_exception
+        last_jwks = await load_jwks()
+        key = next(k for k in last_jwks["keys"] if k["kid"] == kid)
+        if not key:
+            raise credentials_exception
+        public_key = jwk.construct(key).to_pem().decode()
+        payload = jwt.decode(
+            token,
+            public_key,
+            algorithms=[AUTH_JWK_ALGORITHM],
+            audience=AUTH_AUDIENCE,
+            issuer=AUTH_TOKEN_ISSUER,
+            options=options,
+        )
+
+        # Every token we issue *should* contain a jti; treat its absence as invalid.
+        # In addition, if the token has already been used (replayed) or we never issued
+        # it, then we also raise an exception.
+        jti = payload.get("jti")
+        if not jti or not await redis_client.exists(
+            REDIS_CACHE_PREFIX_JTI.format(jti=jti)
+        ):
+            raise credentials_exception
+    except (StopIteration, JWTError) as exc:
+        raise credentials_exception from exc
+
+    if not payload.get("sub"):
+        raise credentials_exception
+
+    # Enforce scopes.
+    token_scopes = {s for s in payload.get("scope", "").split() if s}
+    if not required_scopes.issubset(token_scopes):
+        raise HTTPException(
+            detail="Not enough permissions", status_code=status.HTTP_403_FORBIDDEN
+        )
+
+    return payload
 
 
 def b64url(*, data: bytes) -> str:

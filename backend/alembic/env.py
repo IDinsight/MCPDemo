@@ -3,6 +3,7 @@
 # Standard Library
 import sys
 
+from importlib import import_module
 from logging.config import fileConfig
 from pathlib import Path
 
@@ -27,6 +28,13 @@ config = context.config
 # Interpret the config file for Python logging. This line sets up loggers basically.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Dynamically import all modules containing models so that they are registered with
+# SQLAlchemy. In addition, import any other modules that might cause circular import
+# issues during alembic migrations.
+import_module("mcp_demo.auth.routers")
+import_module("mcp_demo.clients.models")
+import_module("mcp_demo.users.models")
 
 # Add your model's MetaData object here for 'autogenerate' support.
 target_metadata = Base.metadata

@@ -2,14 +2,11 @@
 
 # Standard Library
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import Any
 
 # Third Party Library
-import jwt
-
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, SecurityScopes
-from jose import JWTError, jwk
+from fastapi.security import SecurityScopes
 from loguru import logger
 from redis import asyncio as aioredis
 from sqlalchemy import select
@@ -17,26 +14,15 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
-from mcp_demo.auth.utils import load_jwks
-from mcp_demo.config import Settings
+from mcp_demo.auth.utils import _verify_caller, oauth2_scheme
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import User, UserCreateWithPassword, UserResetPassword
-from mcp_demo.utils.database import get_async_session_managed
+from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.general import (
     generate_hash,
     generate_random_string,
     get_redis_client,
     verify_hash,
-)
-
-AUTH_AUDIENCE = Settings.AUTH_AUDIENCE
-AUTH_JWK_ALGORITHM = Settings.AUTH_JWK_ALGORITHM
-AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
-REDIS_CACHE_PREFIX_JTI = Settings.REDIS_CACHE_PREFIX_JTI
-
-oauth2_scheme = OAuth2PasswordBearer(
-    scopes={"user": "Regular user", "admin": "Site administrator"},
-    tokenUrl="/user/login",
 )
 
 
@@ -141,11 +127,12 @@ async def delete_user_from_db(*, asession: AsyncSession, user_id: int) -> None:
 
 
 async def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
-    redis_client: Annotated[aioredis.Redis, Depends(get_redis_client)],
+    asession: AsyncSession = Depends(get_async_session),
+    redis_client: aioredis.Redis = Depends(get_redis_client),
     security_scopes: SecurityScopes = SecurityScopes(),
+    token: str = Depends(oauth2_scheme),
 ) -> UserDB:
-    """Get the current user from the JWT token.
+    """Verify the current user from the JWT token.
 
     This function decodes the JWT token, verifies its signature using the public key
     from the JWKS, and checks if the user exists in the database. It also verifies that
@@ -153,13 +140,15 @@ async def get_current_user(
 
     Parameters
     ----------
-    token
-        The JWT token to decode and verify.
+    asession
+        The SQLAlchemy async session to use for all database connections.
     redis_client
         The Redis client used to check the JTI (JWT ID) for replay attacks.
     security_scopes
         The security scopes required for the operation, used to check if the token
         has the necessary permissions.
+    token
+        The JWT token to decode and verify.
 
     Returns
     -------
@@ -169,62 +158,31 @@ async def get_current_user(
     Raises
     ------
     HTTPException
-        If the token is invalid, expired, or does not have the required scopes. This
-        exception is raised with a 401 Unauthorized status code if the token cannot be
-        validated, or a 403 Forbidden status code if the token lacks sufficient
-        permissions.
+        If the user is not found or is inactive.
     """
 
-    credentials_exception = HTTPException(
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-        status_code=status.HTTP_401_UNAUTHORIZED,
+    payload = await _verify_caller(
+        options={"require": ["exp", "sub"]},
+        redis_client=redis_client,
+        required_scopes=set(security_scopes.scopes),
+        token=token,
     )
 
     try:
-        header = jwt.get_unverified_header(token)
-        kid = header.get("kid")
-        if not kid:
-            raise credentials_exception
-        last_jwks = await load_jwks()
-        key = next(k for k in last_jwks["keys"] if k["kid"] == kid)
-        if not key:
-            raise credentials_exception
-        public_key = jwk.construct(key).to_pem().decode()
-        payload = jwt.decode(
-            token,
-            public_key,
-            algorithms=[AUTH_JWK_ALGORITHM],
-            audience=AUTH_AUDIENCE,
-            issuer=AUTH_TOKEN_ISSUER,
-            options={"require": ["exp", "sub"]},
-        )
-        jti = payload.get("jti")
-        if not jti or not await redis_client.exists(
-            REDIS_CACHE_PREFIX_JTI.format(jti=jti)
-        ):
-            raise credentials_exception
-    except (StopIteration, JWTError) as exc:
-        raise credentials_exception from exc
-
-    user_id = payload.get("sub", None)
-    if not user_id:
-        raise credentials_exception
-
-    token_scopes = {s for s in payload.get("scope", "").split() if s}
-    required_scopes = set(security_scopes.scopes)
-    if not required_scopes.issubset(token_scopes):
+        user_db = await get_user_by_id(asession=asession, user_id=int(payload["sub"]))
+    except UserNotFoundError as exc:
         raise HTTPException(
-            detail="Not enough permissions", status_code=status.HTTP_403_FORBIDDEN
+            detail="Could not validate credentials",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        ) from exc
+
+    if not user_db.is_active:
+        raise HTTPException(
+            detail="Could not validate credentials",
+            status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    async with get_async_session_managed() as asession:
-        try:
-            user_db = await get_user_by_id(asession=asession, user_id=int(user_id))
-            user_db.scopes = token_scopes
-            return user_db
-        except UserNotFoundError as exc:
-            raise credentials_exception from exc
+    return user_db
 
 
 async def get_user_by_id(*, asession: AsyncSession, user_id: int) -> UserDB:
@@ -409,7 +367,11 @@ async def update_user_in_db(
         The user object saved in the database after update.
     """
 
-    user_db = UserDB(user_id=user_id, username=user.username, **kwargs)
+    user_db = UserDB(
+        user_id=user_id,
+        username=user.username,
+        **kwargs,
+    )
     user_db = await asession.merge(user_db)
 
     await asession.commit()
@@ -457,7 +419,7 @@ async def verify_user(
     asession
         The SQLAlchemy async session to use for all database connections.
     password
-        The password povided by the user for authentication.
+        The password provided by the user for authentication.
     username
         The username provided by the user for authentication.
 
@@ -465,7 +427,7 @@ async def verify_user(
     -------
     UserDB | None
         The user object if the credentials are valid and the user is active; otherwise,
-        None.
+        `None`.
     """
 
     try:
@@ -487,8 +449,12 @@ async def verify_user(
     # Update hashed password.
     user_db = await update_user_in_db(
         asession=asession,
+        is_active=user_db.is_active,
+        is_admin=user_db.is_admin,
         password_hash=hashed_password,
-        user=User(username=user_db.username),
+        user=User(
+            username=user_db.username,
+        ),
         user_id=user_db.user_id,
     )
 
