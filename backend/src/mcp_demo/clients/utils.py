@@ -13,7 +13,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
-from mcp_demo.auth.utils import _verify_caller, oauth2_scheme
+from mcp_demo.auth.utils import _verify_caller, oauth_2_multi_scheme
 from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.schemas import OAuth2ClientCreate
 from mcp_demo.utils.database import get_async_session
@@ -157,7 +157,7 @@ async def get_current_client(
     asession: AsyncSession = Depends(get_async_session),
     redis_client: aioredis.Redis = Depends(get_redis_client),
     security_scopes: SecurityScopes = SecurityScopes(),
-    token: str = Depends(oauth2_scheme),
+    token: str = Depends(oauth_2_multi_scheme),
 ) -> Oauth2ClientDB:
     """Authenticate a JWT issued via client credentials and return the matching
     `Oauth2ClientDB`.

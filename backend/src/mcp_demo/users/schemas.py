@@ -25,8 +25,8 @@ class UserCreate(User):
 class UserCreateWithPassword(User):
     """Pydantic model for user creation with a password."""
 
-    is_admin: bool = False
     password: str
+    requested_scopes: set[str] = {"read", "write", "admin"}
 
 
 class UserCreateWithRecoveryCodes(UserCreate):
@@ -60,7 +60,7 @@ class UserRetrieve(BaseModel):
 
     created_datetime_utc: datetime
     is_active: bool
-    is_admin: bool
+    scopes: list[str]
     updated_datetime_utc: datetime
     user_id: int
     username: str

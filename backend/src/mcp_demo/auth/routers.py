@@ -29,6 +29,7 @@ from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.utils import Oauth2ClientNotFoundError, verify_client
 from mcp_demo.config import Settings
 from mcp_demo.schemas import TokenResponse
+from mcp_demo.scopes.utils import get_user_scopes_by_id
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.utils import UserNotFoundError, verify_user
 from mcp_demo.utils.database import get_async_session
@@ -133,7 +134,8 @@ async def introspect_token(
     # 1.
     if credentials is None:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Basic auth required"
+            detail="Basic authentication required",
+            status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
     # 2.
@@ -183,6 +185,7 @@ async def introspect_token(
 async def token_endpoint(
     request: Request,
     asession: AsyncSession = Depends(get_async_session),
+    credentials: HTTPBasicCredentials | None = Depends(basic_auth),
     form: ClientCredentialsRequestForm = Depends(),
 ) -> TokenResponse:
     """Issue a Bearer token via OAuth2 Client-Credentials or Password grant.
@@ -201,6 +204,9 @@ async def token_endpoint(
         The FastAPI request object.
     asession
         The SQLAlchemy async session to use for all database connections.
+    credentials
+        Optional HTTP Basic credentials for client authentication. If provided, the
+        caller must be a registered client with a valid secret.
     form
         Form data covering both client_credentials and password grants:
             - `grant_type`: one of "client_credentials" or "password"
@@ -227,23 +233,29 @@ async def token_endpoint(
 
     match form.grant_type:
         case "client_credentials":
+            client_id = form.client_id if credentials is None else credentials.username
+            client_secret = (
+                form.client_secret if credentials is None else credentials.password
+            )
+            if not (client_id and client_secret):
+                raise HTTPException(
+                    detail="Client ID/Client Secret required.",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+
             client_db = await verify_client(
-                asession=asession,
-                client_id=form.client_id,
-                client_secret=form.client_secret,
+                asession=asession, client_id=client_id, client_secret=client_secret
             )
             if client_db is None:
                 await record_failed_login(
-                    ip=ip, redis_client=redis_client, user=form.client_id
+                    ip=ip, redis_client=redis_client, user=client_id
                 )
                 raise HTTPException(
                     detail="Invalid client credentials",
                     status_code=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            await reset_failed_login(
-                ip=ip, redis_client=redis_client, user=form.client_id
-            )
+            await reset_failed_login(ip=ip, redis_client=redis_client, user=client_id)
 
             token = await get_jwt_token(
                 grant_type="client_credentials",
@@ -280,13 +292,14 @@ async def token_endpoint(
 
             await reset_failed_login(ip=ip, redis_client=redis_client, user=username)
 
+            user_scopes = await get_user_scopes_by_id(
+                asession=asession, user_id=user_db.user_id
+            )
             token = await get_jwt_token(
                 grant_type="password",
                 passphrase=Settings.AUTH_RSA_PASSPHRASE.get_secret_value(),
                 redis_client=redis_client,
-                scopes=sanitize_scopes(
-                    requested_scopes=form.scopes if user_db.is_admin else ["read"]
-                ),
+                scopes=sanitize_scopes(requested_scopes=list(user_scopes)),
                 sub=str(user_db.user_id),
             )
 

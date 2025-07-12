@@ -75,7 +75,12 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_public_key,
 )
 from fastapi import Depends, Form, HTTPException, Security, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.openapi.models import (
+    OAuthFlowClientCredentials,
+    OAuthFlowPassword,
+    OAuthFlows,
+)
+from fastapi.security import OAuth2
 from filelock import FileLock
 from jose import JWTError, jwk
 from loguru import logger
@@ -107,13 +112,20 @@ AUTH_TOKEN_TTL = Settings.AUTH_TOKEN_TTL
 REDIS_CACHE_PREFIX_JTI = Settings.REDIS_CACHE_PREFIX_JTI
 REDIS_CACHE_PREFIX_JWKS_CURRENT = Settings.REDIS_CACHE_PREFIX_JWKS_CURRENT
 
-oauth2_scheme = OAuth2PasswordBearer(
-    scopes={
-        "admin": "Admin user with full permissions",
-        "read": "User with read permissions only.",
-        "write": "User with read and write permissions.",
-    },
-    tokenUrl="/auth/token",
+oauth_2_multi_scheme = OAuth2(
+    auto_error=False,  # Do not raise 401 automatically, we handle it manually
+    flows=OAuthFlows(
+        clientCredentials=OAuthFlowClientCredentials(
+            scopes={
+                "read": "Read access",
+                "write": "Write access",
+                "admin": "Admin access",
+            },
+            tokenUrl="/auth/token",
+        ),
+        password=OAuthFlowPassword(tokenUrl="/auth/token"),
+    ),
+    scheme_name="OAuth2MultiScheme",  # Label that appears in Swagger-UI
 )
 
 
@@ -161,21 +173,6 @@ class ClientCredentialsRequestForm:
             If the required fields for the specified grant type are not provided.
         """
 
-        match grant_type:
-            case "client_credentials":
-                assert (
-                    client_id and client_secret
-                ), "client_id and client_secret must be provided for client_credentials"
-            case "password":
-                assert (
-                    username and password
-                ), "username and password must be provided for password grant"
-            case _:
-                raise ValueError(
-                    f"Unsupported grant_type: {grant_type}. "
-                    f"Valid options are: 'client_credentials' or 'password'."
-                )
-
         self.client_id = client_id
         self.client_secret = client_secret
         self.grant_type = grant_type
@@ -213,7 +210,7 @@ async def _verify_caller(
     options: dict[str, Any],
     redis_client: Annotated[aioredis.Redis, Depends(get_redis_client)],
     required_scopes: set[str],
-    token: Annotated[str, Depends(oauth2_scheme)],
+    token: Annotated[str, Depends(oauth_2_multi_scheme)],
 ) -> dict[str, Any]:
     """Shared JWT verifier for **both** users and service-clients.
 
@@ -771,7 +768,11 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
         the required scopes.
     """
 
-    async def scope_checker(token: str = Depends(oauth2_scheme)) -> dict[str, Any]:
+    async def scope_checker(
+        token: str | None = Security(
+            oauth_2_multi_scheme, scopes=list(required_scopes)
+        ),
+    ) -> dict[str, Any]:
         """Check if the token has the required scopes.
 
         This function decodes the JWT token, validates it, and checks if the token
@@ -796,6 +797,12 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
             required scopes.
         """
 
+        if token is None:
+            raise HTTPException(
+                detail="Not authenticated", status_code=status.HTTP_401_UNAUTHORIZED
+            )
+
+        token = token.lstrip("Bearer").strip()
         claims = await validate_token_and_get_claims(token=token)
         token_scopes = claims.get("scope", "")
         if isinstance(token_scopes, str):
@@ -810,7 +817,7 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
 
         return claims
 
-    return Security(scope_checker, scopes=list(required_scopes))
+    return Depends(scope_checker)
 
 
 async def rotate_keys(
@@ -1005,8 +1012,7 @@ def sanitize_scopes(*, requested_scopes: list[str] | None) -> list[str]:
     """Sanitize the requested scopes against the allowed scopes.
 
     This function ensures that the requested scopes are valid and allowed by the
-    authentication service. If no scopes are requested, it defaults to the "read"
-    scope to ensure that at least one scope is always present.
+    authentication service.
 
     Parameters
     ----------
@@ -1017,13 +1023,11 @@ def sanitize_scopes(*, requested_scopes: list[str] | None) -> list[str]:
     -------
     list[str]
         A list of sanitized scopes that are allowed by the authentication service.
-        If no valid scopes are requested, it defaults to ["read"].
     """
 
     allowed = Settings.AUTH_ALLOWED_SCOPES
     requested = set(requested_scopes or [])
-    cleaned = list(allowed & requested) or ["read"]  # Never issue an empty scope set
-    return cleaned
+    return list(allowed & requested)
 
 
 def save_jwks(*, jwks: dict[str, Any], jwks_fn: str = AUTH_JWKS_FN) -> None:

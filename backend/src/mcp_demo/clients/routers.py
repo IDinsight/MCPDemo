@@ -39,18 +39,19 @@ limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
 
 
 @router.get("/admin-panel")
-async def admin_view(
+async def admin_panel(
     claims: dict = require_scopes(required_scopes={"admin"}),  # pylint: disable=W0613
 ) -> dict[str, str]:
-    """Admin panel view for users with admin scope.
+    """Admin panel view for clients with admin scope.
 
-    This endpoint is protected and can only be accessed by users with the 'admin' scope.
-    It returns a simple message indicating that the user has access to the admin panel.
+    This endpoint is protected and can only be accessed by clients with the 'admin'
+    scope. It returns a simple message indicating that the user has access to the admin
+    panel.
 
     Parameters
     ----------
     claims
-        The claims of the authenticated user, used to verify scopes.
+        The claims of the authenticated client, used to verify scopes.
 
     Returns
     -------

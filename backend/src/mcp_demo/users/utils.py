@@ -14,7 +14,7 @@ from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
-from mcp_demo.auth.utils import _verify_caller, oauth2_scheme
+from mcp_demo.auth.utils import _verify_caller, oauth_2_multi_scheme
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import User, UserCreateWithPassword, UserResetPassword
 from mcp_demo.utils.database import get_async_session
@@ -130,7 +130,7 @@ async def get_current_user(
     asession: AsyncSession = Depends(get_async_session),
     redis_client: aioredis.Redis = Depends(get_redis_client),
     security_scopes: SecurityScopes = SecurityScopes(),
-    token: str = Depends(oauth2_scheme),
+    token: str = Depends(oauth_2_multi_scheme),
 ) -> UserDB:
     """Verify the current user from the JWT token.
 
@@ -327,11 +327,11 @@ async def save_user_to_db(
     user_db = UserDB(
         created_datetime_utc=datetime.now(timezone.utc),
         is_active=True,
-        is_admin=user.is_admin,
         password_hash=generate_hash(text=password),
         recovery_codes_hash=[
             generate_hash(text=recovery_code) for recovery_code in recovery_codes
         ],
+        # scopes=user.scopes,
         username=user.username,
     )
     asession.add(user_db)
@@ -344,8 +344,8 @@ async def save_user_to_db(
 async def update_user_in_db(
     *,
     asession: AsyncSession,
-    user: User,
     user_id: int,
+    username: str,
     **kwargs: Any,
 ) -> UserDB:
     """Update a user in the database.
@@ -354,10 +354,10 @@ async def update_user_in_db(
     ----------
     asession
         The SQLAlchemy async session to use for all database connections.
-    user
-        The user object to update in the database.
     user_id
         The user ID to use for the query.
+    username
+        The username to update in the database.
     kwargs
         Additional keyword arguments to update the user object in the database.
 
@@ -367,11 +367,7 @@ async def update_user_in_db(
         The user object saved in the database after update.
     """
 
-    user_db = UserDB(
-        user_id=user_id,
-        username=user.username,
-        **kwargs,
-    )
+    user_db = UserDB(user_id=user_id, username=username, **kwargs)
     user_db = await asession.merge(user_db)
 
     await asession.commit()
@@ -450,11 +446,9 @@ async def verify_user(
     user_db = await update_user_in_db(
         asession=asession,
         is_active=user_db.is_active,
-        is_admin=user_db.is_admin,
         password_hash=hashed_password,
-        user=User(
-            username=user_db.username,
-        ),
+        scopes=user_db.scopes,
+        username=user_db.username,
         user_id=user_db.user_id,
     )
 

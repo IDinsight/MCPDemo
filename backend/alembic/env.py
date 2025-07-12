@@ -30,10 +30,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Dynamically import all modules containing models so that they are registered with
-# SQLAlchemy. In addition, import any other modules that might cause circular import
-# issues during alembic migrations.
-import_module("mcp_demo.auth.routers")
+# SQLAlchemy.
 import_module("mcp_demo.clients.models")
+import_module("mcp_demo.scopes.models")
 import_module("mcp_demo.users.models")
 
 # Add your model's MetaData object here for 'autogenerate' support.

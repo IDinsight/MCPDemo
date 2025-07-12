@@ -12,6 +12,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
+from mcp_demo.auth.utils import require_scopes
 from mcp_demo.config import Settings
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import (
@@ -41,6 +42,29 @@ router = APIRouter(prefix="/user", tags=[TAG_METADATA["name"]])
 limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
 
 REDIS_CACHE_PREFIX_CHAT = Settings.REDIS_CACHE_PREFIX_CHAT
+
+
+@router.get("/admin-panel")
+async def admin_panel(
+    claims: dict = require_scopes(required_scopes={"admin"}),  # pylint: disable=W0613
+) -> dict[str, str]:
+    """Admin panel view for users with admin scope.
+
+    This endpoint is protected and can only be accessed by users with the 'admin' scope.
+    It returns a simple message indicating that the user has access to the admin panel.
+
+    Parameters
+    ----------
+    claims
+        The claims of the authenticated user, used to verify scopes.
+
+    Returns
+    -------
+    dict[str, str]
+        A message indicating access to the admin panel.
+    """
+
+    return {"message": "Welcome to the admin panel!"}
 
 
 @router.post("/register", response_model=UserCreateWithRecoveryCodes)
@@ -239,7 +263,6 @@ async def reset_password(
     return UserRetrieve(
         created_datetime_utc=updated_user_db.created_datetime_utc,
         is_active=updated_user_db.is_active,
-        is_admin=updated_user_db.is_admin,
         updated_datetime_utc=updated_user_db.updated_datetime_utc,
         user_id=updated_user_db.user_id,
         username=updated_user_db.username,

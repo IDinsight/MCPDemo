@@ -1,27 +1,21 @@
 """This module contains the ORM for managing users."""
 
-# Future Library
-from __future__ import annotations
-
+# pylint: disable=E1136
 # Standard Library
 from datetime import datetime, timezone
 
 # Third Party Library
 from sqlalchemy import ARRAY, Boolean, DateTime, Integer, String
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 # Package Library
+from mcp_demo.scopes.models import ScopeDB, user_scope_table
 from mcp_demo.utils.database import Base
 
 
 class UserDB(Base):
     """ORM for managing users.
-
-    Notes
-    -----
-    1. `scopes` is runtime-only: populated from the access-token payload and never
-        persisted to the database.
 
     Attributes
     ----------
@@ -29,15 +23,13 @@ class UserDB(Base):
         Row creation timestamp (server default: ``NOW() AT TIME ZONE 'UTC'``).
     is_active
         Soft-delete flag; inactive users cannot log in.
-    is_admin
-        Grants elevated privileges enforced by the router guards.
     password_hash
         *Argon2id* hash of the user’s password.
     recovery_codes_hash
         One-time recovery codes, individually hashed. ``None`` until 2-factor auth is
         enabled.
     scopes
-        Injected at request time; not stored in the database.
+        Scopes associated with the user, allowing access to specific resources.
     updated_datetime_utc
         Automatically updated on each ``UPDATE`` via `func.now()`.
     user_id
@@ -46,17 +38,17 @@ class UserDB(Base):
         Unique login name; indexed and case-sensitive.
     """
 
-    __allow_unmapped__ = True
     __tablename__ = "user"
 
     created_datetime_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.now(timezone.utc), nullable=False
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     password_hash: Mapped[str] = mapped_column(String(), nullable=False)
     recovery_codes_hash: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=True)
-    scopes: set[str] | None = None  # Runtime-only, not persisted
+    scopes: Mapped[list[ScopeDB]] = relationship(
+        back_populates="users", cascade="all,delete", secondary=user_scope_table
+    )
     updated_datetime_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
