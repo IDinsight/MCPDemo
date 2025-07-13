@@ -72,7 +72,10 @@ async def get_jwks() -> JSONResponse:
         The JWKS bundle containing all active public keys.
     """
 
-    return JSONResponse(await get_cached_jwks())
+    jwks = await get_cached_jwks()
+    print(f"{jwks = }")
+    input()
+    return JSONResponse(jwks)
 
 
 @router.post("/introspect", response_model=IntrospectionResponse)

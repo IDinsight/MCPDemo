@@ -248,6 +248,7 @@ async def _verify_caller(
         headers={"WWW-Authenticate": "Bearer"},
         status_code=status.HTTP_401_UNAUTHORIZED,
     )
+    token = token.removeprefix("Bearer ").strip()
 
     try:
         header = jwt.get_unverified_header(token)
@@ -802,7 +803,7 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
                 detail="Not authenticated", status_code=status.HTTP_401_UNAUTHORIZED
             )
 
-        token = token.lstrip("Bearer").strip()
+        token = token.removeprefix("Bearer ").strip()
         claims = await validate_token_and_get_claims(token=token)
         token_scopes = claims.get("scope", "")
         if isinstance(token_scopes, str):

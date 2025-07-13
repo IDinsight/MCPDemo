@@ -139,7 +139,7 @@ async def add_scopes_to_user(
 
 
 async def check_if_user_exists(
-    *, asession: AsyncSession, user: User | UserResetPassword
+    *, asession: AsyncSession, user: User | UserCreateWithPassword | UserResetPassword
 ) -> UserDB | None:
     """Check if a user exists in the database.
 
@@ -188,10 +188,10 @@ async def delete_scope_from_user(
 
     The process is as follows:
 
-    1. Retrieve the user by user ID.
-    2. Check if the scope is associated with the user.
-    3. If the scope is not associated, return `None`.
-    4. If the scope is associated, delete the association and commit the changes.
+    1. Check if the scope is associated with the user.
+    2. If the scope is not associated, return `None`.
+    3. If the scope is associated, delete the association and commit the changes.
+    4. Return the user object with the updated scopes.
 
     Parameters
     ----------
@@ -209,12 +209,6 @@ async def delete_scope_from_user(
     """
 
     # 1.
-    try:
-        user_db = await get_user_by_id(asession=asession, user_id=user_id)
-    except UserNotFoundError:
-        return None
-
-    # 2.
     stmt = select(user_scope_table).where(
         user_scope_table.c.scope_name == scope_name,
         user_scope_table.c.user_id == user_id,
@@ -222,11 +216,11 @@ async def delete_scope_from_user(
     result = await asession.execute(stmt)
     association = result.first()
 
-    # 3.
+    # 2.
     if not association:
         return None  # Scope not assigned
 
-    # 4.
+    # 3.
     await asession.execute(
         delete(user_scope_table).where(
             user_scope_table.c.user_id == user_id,
@@ -235,6 +229,13 @@ async def delete_scope_from_user(
     )
     await asession.commit()
     await asession.flush()
+
+    # 4.
+    user_db = await asession.scalar(
+        select(UserDB)
+        .options(selectinload(UserDB.scopes))
+        .where(UserDB.user_id == user_id)
+    )
 
     return user_db
 
