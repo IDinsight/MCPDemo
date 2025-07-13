@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mcp_demo.auth.utils import require_scopes
 from mcp_demo.config import Settings
 from mcp_demo.scopes.schemas import ScopeCreate, ScopeDeleteResponse, ScopeResponse
-from mcp_demo.scopes.utils import add_scope, delete_scope_from_db
+from mcp_demo.scopes.utils import add_scope_to_db, delete_scope_from_db
 from mcp_demo.utils.database import get_async_session
 
 TAG_METADATA = {"description": "Manages scopes", "name": "Scope"}
@@ -46,7 +46,7 @@ async def create_global_scope(
         The response containing the created scope name.
     """
 
-    scope_db = await add_scope(asession=asession, scope=scope_create)
+    scope_db = await add_scope_to_db(asession=asession, scope=scope_create)
 
     return ScopeResponse(scopes=[scope_db.name])
 

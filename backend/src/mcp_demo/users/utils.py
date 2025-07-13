@@ -9,7 +9,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import SecurityScopes
 from loguru import logger
 from redis import asyncio as aioredis
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload
 # Package Library
 from mcp_demo.auth.utils import _verify_caller, oauth_2_multi_scheme
 from mcp_demo.config import Settings
-from mcp_demo.scopes.models import ScopeDB
+from mcp_demo.scopes.models import ScopeDB, user_scope_table
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import User, UserCreateWithPassword, UserResetPassword
 from mcp_demo.utils.database import get_async_session
@@ -179,6 +179,64 @@ async def check_if_users_exist(*, asession: AsyncSession) -> bool:
     stmt = select(UserDB.user_id).limit(1)
     result = await asession.scalars(stmt)
     return result.first() is not None
+
+
+async def delete_scope_from_user(
+    *, asession: AsyncSession, scope_name: str, user_id: int
+) -> UserDB | None:
+    """Delete `scope_name` from the user identified by `user_id`.
+
+    The process is as follows:
+
+    1. Retrieve the user by user ID.
+    2. Check if the scope is associated with the user.
+    3. If the scope is not associated, return `None`.
+    4. If the scope is associated, delete the association and commit the changes.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    scope_name
+        The name of the scope to remove from the user.
+    user_id
+        The user ID from which the scope association should be removed.
+
+    Returns
+    -------
+    UserDB | None
+        The user object if the scope was successfully removed, otherwise `None`.
+    """
+
+    # 1.
+    try:
+        user_db = await get_user_by_id(asession=asession, user_id=user_id)
+    except UserNotFoundError:
+        return None
+
+    # 2.
+    stmt = select(user_scope_table).where(
+        user_scope_table.c.scope_name == scope_name,
+        user_scope_table.c.user_id == user_id,
+    )
+    result = await asession.execute(stmt)
+    association = result.first()
+
+    # 3.
+    if not association:
+        return None  # Scope not assigned
+
+    # 4.
+    await asession.execute(
+        delete(user_scope_table).where(
+            user_scope_table.c.user_id == user_id,
+            user_scope_table.c.scope_name == scope_name,
+        )
+    )
+    await asession.commit()
+    await asession.flush()
+
+    return user_db
 
 
 async def delete_user_from_db(*, asession: AsyncSession, user_id: int) -> None:

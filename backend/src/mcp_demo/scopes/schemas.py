@@ -33,3 +33,5 @@ class ScopeDeleteResponse(Scope):
 
 class ScopeResponse(ScopeAssign):
     """Pydantic model for the response of scope assignment."""
+
+    user_id: int

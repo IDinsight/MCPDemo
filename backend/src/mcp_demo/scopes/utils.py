@@ -11,7 +11,7 @@ from mcp_demo.scopes.models import ScopeDB, user_scope_table
 from mcp_demo.scopes.schemas import Scope, ScopeCreate
 
 
-async def add_scope(*, asession: AsyncSession, scope: ScopeCreate) -> ScopeDB:
+async def add_scope_to_db(*, asession: AsyncSession, scope: ScopeCreate) -> ScopeDB:
     """Add a new (global) scope to the database.
 
     Parameters

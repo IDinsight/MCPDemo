@@ -14,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Package Library
 from mcp_demo.auth.utils import require_scopes
 from mcp_demo.config import Settings
-from mcp_demo.scopes.schemas import ScopeCreate
-from mcp_demo.scopes.utils import add_scope
+from mcp_demo.scopes.schemas import ScopeAssign, ScopeCreate, ScopeResponse
+from mcp_demo.scopes.utils import add_scope_to_db, check_if_scope_exists
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import (
     UserCreateWithPassword,
@@ -29,9 +29,11 @@ from mcp_demo.users.utils import (
     add_scopes_to_user,
     check_if_user_exists,
     check_if_users_exist,
+    delete_scope_from_user,
     delete_user_from_db,
     get_current_user,
     get_user_by_id,
+    get_user_scopes_by_id,
     reset_user_password,
     save_user_to_db,
     verify_recovery_code,
@@ -71,111 +73,132 @@ async def admin_panel(
     return {"message": "Welcome to the admin panel!"}
 
 
-# @router.post("/{user_id}/scope", response_model=ScopeResponse)
-# @limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
-# async def add_scopes_to_user(
-#     calling_user_db: Annotated[UserDB, Depends(get_current_user)],
-#     scope_assign: ScopeAssign,
-#     request: Request,  # pylint: disable=W0613
-#     user_id: int,
-#     asession: AsyncSession = Depends(get_async_session),
-# ) -> ScopeResponse:
-#     """Add scopes to a user.
-#
-#     Parameters
-#     ----------
-#     calling_user_db
-#         The user who is making the request. This is used to check if the user has the
-#         required scope to assign scopes.
-#     scope_assign
-#     request
-#         The FastAPI request object. This is needed for SlowAPI rate limiting.
-#     user_id
-#     asession
-#
-#     Returns
-#     -------
-#     ScopeResponse
-#         The response containing the user ID and the list of scopes assigned to the user.
-#
-#     Raises
-#     ------
-#     HTTPException
-#         If the calling user does not have the 'admin' scope.
-#         If any of the provided scopes are unknown, a 400 error is raised with details.
-#     """
-#
-#     calling_user_scopes = await get_user_scopes_by_id(
-#         asession=asession, user_id=calling_user_db.user_id
-#     )
-#     if "admin" not in calling_user_scopes:
-#         raise HTTPException(
-#             detail="Insufficient permission to assign scopes.",
-#             status_code=status.HTTP_403_FORBIDDEN,
-#         )
-#
-#     if not await validate_user_scopes(scopes=scope_assign.scopes):
-#         raise HTTPException(
-#             status_code=status.HTTP_400_BAD_REQUEST,
-#             detail="One or more scopes are not allowed",
-#         )
-#
-#     user = await get_user_by_id(asession=asession, user_id=user_id)
-#
-#     existing = {s.name for s in user.scopes}
-#     for name in scope_assign.scopes:
-#         if name not in existing:
-#             user.scopes.append(await asession.get(ScopeDB, name))
-#     await asession.commit()
-#
-#     return ScopeResponse(scopes=[s.name for s in user.scopes], user_id=user.user_id)
+@router.post("/{user_id}/scope", response_model=ScopeResponse)
+async def add_user_scope(
+    calling_user_db: Annotated[UserDB, Depends(get_current_user)],
+    scope_assign: ScopeAssign,
+    user_id: int,
+    asession: AsyncSession = Depends(get_async_session),
+) -> ScopeResponse:
+    """Add scopes to a user.
+
+    Parameters
+    ----------
+    calling_user_db
+        The user who is making the request. This is used to check if the user has the
+        required scope to assign scopes.
+    scope_assign
+        The scopes to assign to the user.
+    user_id
+        The ID of the user to whom the scopes will be assigned.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+
+    Returns
+    -------
+    ScopeResponse
+        The response containing the user ID and the list of scopes assigned to the user.
+
+    Raises
+    ------
+    HTTPException
+        If the calling user does not have the 'admin' scope.
+    """
+
+    calling_user_scopes = await get_user_scopes_by_id(
+        asession=asession, user_id=calling_user_db.user_id
+    )
+    if "admin" not in calling_user_scopes:
+        raise HTTPException(
+            detail="Insufficient permission to assign scopes.",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    user_db = await get_user_by_id(asession=asession, user_id=user_id)
+
+    added_scopes = await add_scopes_to_user(
+        asession=asession, scopes=scope_assign.scopes, user_db=user_db
+    )
+
+    return ScopeResponse(scopes=added_scopes, user_id=user_db.user_id)
 
 
-# @router.delete("/{user_id}/{scope_name}", response_model=ScopeResponse)
-# @limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
-# async def remove_scope_from_user(
-#     request: Request,  # pylint: disable=W0613
-#     scope_name: str,
-#     user_id: int,
-#     asession: AsyncSession = Depends(get_async_session),
-# ) -> ScopeResponse:
-#     """
-#
-#     Parameters
-#     ----------
-#     request
-#         The FastAPI request object. This is needed for SlowAPI rate limiting.
-#     scope_name
-#     user_id
-#     asession
-#
-#     Returns
-#     -------
-#
-#     """
-#     # 404 on unknown scope
-#     if not await asession.get(ScopeDB, scope_name):
-#         raise HTTPException(
-#             detail=f"Scope '{scope_name}' not found",
-#             status_code=status.HTTP_404_NOT_FOUND,
-#         )
-#
-#     # delete association row
-#     stmt = delete(user_scope).where(
-#         user_scope.c.user_id == user_id, user_scope.c.scope_name == scope_name
-#     )
-#     result = await asession.execute(stmt)
-#     if result.rowcount == 0:
-#         raise HTTPException(
-#             detail="User does not have that scope",
-#             status_code=status.HTTP_404_NOT_FOUND,
-#         )
-#     await asession.commit()
-#
-#     user_db = await get_user_by_id(asession=asession, user_id=user_id)
-#     return ScopeResponse(
-#         user_id=user_db.user_id, scopes=[s.name for s in user_db.scopes]
-#     )
+@router.delete("/{user_id}/{scope_name}", response_model=ScopeResponse)
+async def delete_user_scope(
+    calling_user_db: Annotated[UserDB, Depends(get_current_user)],
+    scope_name: str,
+    user_id: int,
+    asession: AsyncSession = Depends(get_async_session),
+) -> ScopeResponse:
+    """Delete a scope from a user.
+
+    The process is as follows:
+
+    1. Check if the authenticated user has permission to delete scopes.
+    2. Check if the scope exists in the database.
+    3. Delete the scope from the user.
+    4. If the scope is not assigned to the user, raise an error.
+
+    Parameters
+    ----------
+    calling_user_db
+        The user who is making the request. This is used to check if the user has the
+        required scope to delete scopes.
+    scope_name
+        The name of the scope to delete from the user.
+    user_id
+        The ID of the user from whom the scope will be deleted.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+
+    Returns
+    -------
+    ScopeResponse
+        The response containing the user ID and the list of scopes remaining for the
+        user.
+
+    Raises
+    ------
+    HTTPException
+        If the calling user does not have the 'admin' scope.
+        If the scope does not exist.
+        If the scope is not assigned to the user.
+    """
+
+    # 1.
+    calling_user_scopes = await get_user_scopes_by_id(
+        asession=asession, user_id=calling_user_db.user_id
+    )
+    if "admin" not in calling_user_scopes:
+        raise HTTPException(
+            detail="Insufficient permission to delete scopes.",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    # 2.
+    if not await check_if_scope_exists(
+        asession=asession, scope=ScopeCreate(name=scope_name)
+    ):
+        raise HTTPException(
+            detail=f"Scope '{scope_name}' does not exist.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    # 3.
+    user_db = await delete_scope_from_user(
+        asession=asession, scope_name=scope_name, user_id=user_id
+    )
+
+    # 4.
+    if not user_db:
+        raise HTTPException(
+            detail=f"Scope '{scope_name}' not found for user ID {user_id}.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    return ScopeResponse(
+        user_id=user_db.user_id, scopes=[s.name for s in user_db.scopes]
+    )
 
 
 @router.post("/register", response_model=UserCreateWithRecoveryCodes)
@@ -234,7 +257,7 @@ async def register(
     # 4.
     added_scopes = ["read"]
     if not users_exist:
-        await add_scope(asession=asession, scope=ScopeCreate(name="admin"))
+        await add_scope_to_db(asession=asession, scope=ScopeCreate(name="admin"))
         added_scopes = await add_scopes_to_user(
             asession=asession, scopes=["admin"], user_db=user_db
         )
