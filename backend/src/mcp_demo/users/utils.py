@@ -12,9 +12,12 @@ from redis import asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 # Package Library
 from mcp_demo.auth.utils import _verify_caller, oauth_2_multi_scheme
+from mcp_demo.config import Settings
+from mcp_demo.scopes.models import ScopeDB
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import User, UserCreateWithPassword, UserResetPassword
 from mcp_demo.utils.database import get_async_session
@@ -58,6 +61,81 @@ class UserNotFoundError(Exception):
         super().__init__(f"User not found: {error_msg}")
 
         self.error_msg = error_msg
+
+
+async def add_scopes_to_user(
+    *, asession: AsyncSession, scopes: list[str], user_db: UserDB
+) -> list[str]:
+    """Add scopes to a user.
+
+    The process is as follows:
+
+    1. Validate scope names against the allowed scopes defined in the settings.
+    2. Check if the scopes exist in the database.
+    3. Append only missing scopes.
+    4. Commit the changes to the database.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    scopes
+        A list of scope names to be added to the user.
+    user_db
+        The user database object to which the scopes will be added.
+
+    Returns
+    -------
+    list[str]
+        A list of scope names that were successfully added to the user.
+
+    Raises
+    ------
+    HTTPException
+        If any of the provided scopes are not allowed.
+        If any of the provided scopes are not found in the database.
+    """
+
+    # 1.
+    allowed = set(Settings.AUTH_ALLOWED_SCOPES)
+    unknown_scopes = [s for s in scopes if s not in allowed]
+    if unknown_scopes:
+        raise HTTPException(
+            detail=f"Unknown scopes: {', '.join(unknown_scopes)}",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # 2.
+    scope_rows = (
+        await asession.scalars(select(ScopeDB).where(ScopeDB.name.in_(scopes)))
+    ).all()
+    missing_in_db = {s for s in scopes if s not in {row.name for row in scope_rows}}
+    if missing_in_db:
+        raise HTTPException(
+            detail=f"Scope(s) not seeded in DB: {', '.join(missing_in_db)}",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    # 3.
+    stmt = (
+        select(UserDB)
+        .options(selectinload(UserDB.scopes))
+        .where(UserDB.user_id == user_db.user_id)
+    )
+    user_db = await asession.scalar(stmt)
+    added_scopes: list[str] = []
+    existing = {s.name for s in user_db.scopes}
+    for scope_row in scope_rows:
+        if scope_row.name not in existing:
+            user_db.scopes.append(scope_row)
+            added_scopes.append(scope_row.name)
+
+    # 4.
+    asession.add(user_db)
+    await asession.commit()
+    await asession.refresh(user_db)
+
+    return added_scopes
 
 
 async def check_if_user_exists(
@@ -251,6 +329,32 @@ async def get_user_by_username(*, asession: AsyncSession, username: str) -> User
         ) from err
 
 
+async def get_user_scopes_by_id(*, asession: AsyncSession, user_id: int) -> set[str]:
+    """Get the scopes of a user.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    user_id
+        The ID of the user whose scopes are to be retrieved.
+
+    Returns
+    -------
+    set[str]
+        A set of scope names associated with the user.
+    """
+
+    stmt = (
+        select(UserDB)
+        .options(selectinload(UserDB.scopes))
+        .where(UserDB.user_id == user_id)
+    )
+    result = await asession.execute(stmt)
+    user = result.scalar_one()
+    return {s.name for s in user.scopes}
+
+
 async def reset_user_password(
     *,
     asession: AsyncSession,
@@ -311,11 +415,11 @@ async def save_user_to_db(
         If a user with the same user ID already exists in the database.
     """
 
-    existing_user = await check_if_user_exists(asession=asession, user=user)
+    existing_user_db = await check_if_user_exists(asession=asession, user=user)
 
-    if existing_user is not None:
+    if existing_user_db is not None:
         raise UserAlreadyExistsError(
-            error_msg=f"User ID already exists: {existing_user.user_id}"
+            error_msg=f"User ID already exists: {existing_user_db.user_id}"
         )
 
     password = (
@@ -331,7 +435,6 @@ async def save_user_to_db(
         recovery_codes_hash=[
             generate_hash(text=recovery_code) for recovery_code in recovery_codes
         ],
-        # scopes=user.scopes,
         username=user.username,
     )
     asession.add(user_db)
@@ -374,6 +477,18 @@ async def update_user_in_db(
     await asession.refresh(user_db)
 
     return user_db
+
+
+async def validate_user_scopes(*, scopes: list[str]) -> bool:
+    """Validate that the provided scopes are allowed.
+
+    Parameters
+    ----------
+    scopes
+        A list of scope names to validate.
+    """
+
+    return set(scopes).issubset(Settings.AUTH_ALLOWED_SCOPES)
 
 
 async def verify_recovery_code(
@@ -447,7 +562,6 @@ async def verify_user(
         asession=asession,
         is_active=user_db.is_active,
         password_hash=hashed_password,
-        scopes=user_db.scopes,
         username=user_db.username,
         user_id=user_db.user_id,
     )

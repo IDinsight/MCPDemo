@@ -29,9 +29,8 @@ from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.utils import Oauth2ClientNotFoundError, verify_client
 from mcp_demo.config import Settings
 from mcp_demo.schemas import TokenResponse
-from mcp_demo.scopes.utils import get_user_scopes_by_id
 from mcp_demo.users.models import UserDB
-from mcp_demo.users.utils import UserNotFoundError, verify_user
+from mcp_demo.users.utils import UserNotFoundError, get_user_scopes_by_id, verify_user
 from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.rate_limit import (
     is_locked_out,

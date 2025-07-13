@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Package Library
 from mcp_demo.auth.utils import require_scopes
 from mcp_demo.config import Settings
+from mcp_demo.scopes.schemas import ScopeCreate
+from mcp_demo.scopes.utils import add_scope
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import (
     UserCreateWithPassword,
@@ -24,7 +26,9 @@ from mcp_demo.users.schemas import (
 )
 from mcp_demo.users.utils import (
     UserNotFoundError,
+    add_scopes_to_user,
     check_if_user_exists,
+    check_if_users_exist,
     delete_user_from_db,
     get_current_user,
     get_user_by_id,
@@ -67,6 +71,113 @@ async def admin_panel(
     return {"message": "Welcome to the admin panel!"}
 
 
+# @router.post("/{user_id}/scope", response_model=ScopeResponse)
+# @limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+# async def add_scopes_to_user(
+#     calling_user_db: Annotated[UserDB, Depends(get_current_user)],
+#     scope_assign: ScopeAssign,
+#     request: Request,  # pylint: disable=W0613
+#     user_id: int,
+#     asession: AsyncSession = Depends(get_async_session),
+# ) -> ScopeResponse:
+#     """Add scopes to a user.
+#
+#     Parameters
+#     ----------
+#     calling_user_db
+#         The user who is making the request. This is used to check if the user has the
+#         required scope to assign scopes.
+#     scope_assign
+#     request
+#         The FastAPI request object. This is needed for SlowAPI rate limiting.
+#     user_id
+#     asession
+#
+#     Returns
+#     -------
+#     ScopeResponse
+#         The response containing the user ID and the list of scopes assigned to the user.
+#
+#     Raises
+#     ------
+#     HTTPException
+#         If the calling user does not have the 'admin' scope.
+#         If any of the provided scopes are unknown, a 400 error is raised with details.
+#     """
+#
+#     calling_user_scopes = await get_user_scopes_by_id(
+#         asession=asession, user_id=calling_user_db.user_id
+#     )
+#     if "admin" not in calling_user_scopes:
+#         raise HTTPException(
+#             detail="Insufficient permission to assign scopes.",
+#             status_code=status.HTTP_403_FORBIDDEN,
+#         )
+#
+#     if not await validate_user_scopes(scopes=scope_assign.scopes):
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="One or more scopes are not allowed",
+#         )
+#
+#     user = await get_user_by_id(asession=asession, user_id=user_id)
+#
+#     existing = {s.name for s in user.scopes}
+#     for name in scope_assign.scopes:
+#         if name not in existing:
+#             user.scopes.append(await asession.get(ScopeDB, name))
+#     await asession.commit()
+#
+#     return ScopeResponse(scopes=[s.name for s in user.scopes], user_id=user.user_id)
+
+
+# @router.delete("/{user_id}/{scope_name}", response_model=ScopeResponse)
+# @limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+# async def remove_scope_from_user(
+#     request: Request,  # pylint: disable=W0613
+#     scope_name: str,
+#     user_id: int,
+#     asession: AsyncSession = Depends(get_async_session),
+# ) -> ScopeResponse:
+#     """
+#
+#     Parameters
+#     ----------
+#     request
+#         The FastAPI request object. This is needed for SlowAPI rate limiting.
+#     scope_name
+#     user_id
+#     asession
+#
+#     Returns
+#     -------
+#
+#     """
+#     # 404 on unknown scope
+#     if not await asession.get(ScopeDB, scope_name):
+#         raise HTTPException(
+#             detail=f"Scope '{scope_name}' not found",
+#             status_code=status.HTTP_404_NOT_FOUND,
+#         )
+#
+#     # delete association row
+#     stmt = delete(user_scope).where(
+#         user_scope.c.user_id == user_id, user_scope.c.scope_name == scope_name
+#     )
+#     result = await asession.execute(stmt)
+#     if result.rowcount == 0:
+#         raise HTTPException(
+#             detail="User does not have that scope",
+#             status_code=status.HTTP_404_NOT_FOUND,
+#         )
+#     await asession.commit()
+#
+#     user_db = await get_user_by_id(asession=asession, user_id=user_id)
+#     return ScopeResponse(
+#         user_id=user_db.user_id, scopes=[s.name for s in user_db.scopes]
+#     )
+
+
 @router.post("/register", response_model=UserCreateWithRecoveryCodes)
 @limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
 async def register(
@@ -81,6 +192,8 @@ async def register(
     1. If the username already exists, then raise a 400 error.
     2. Generate recovery codes for the new user.
     3. Save the user to the database with the recovery codes.
+    4. If no users exist in the database, create an 'admin' scope and assign it to the
+        (first) user.
 
     Parameters
     ----------
@@ -108,6 +221,8 @@ async def register(
             detail="User name already exists.", status_code=status.HTTP_400_BAD_REQUEST
         )
 
+    users_exist = await check_if_users_exist(asession=asession)
+
     # 2.
     recovery_codes = generate_recovery_codes()
 
@@ -116,8 +231,17 @@ async def register(
         asession=asession, recovery_codes=recovery_codes, user=user
     )
 
+    # 4.
+    added_scopes = ["read"]
+    if not users_exist:
+        await add_scope(asession=asession, scope=ScopeCreate(name="admin"))
+        added_scopes = await add_scopes_to_user(
+            asession=asession, scopes=["admin"], user_db=user_db
+        )
+
     return UserCreateWithRecoveryCodes(
         recovery_codes=recovery_codes,
+        scopes=added_scopes,
         user_id=user_db.user_id,
         username=user_db.username,
     )

@@ -26,7 +26,6 @@ class UserCreateWithPassword(User):
     """Pydantic model for user creation with a password."""
 
     password: str
-    requested_scopes: set[str] = {"read", "write", "admin"}
 
 
 class UserCreateWithRecoveryCodes(UserCreate):
@@ -35,6 +34,7 @@ class UserCreateWithRecoveryCodes(UserCreate):
     """
 
     recovery_codes: list[str]
+    scopes: list[str] = ["read"]
 
 
 class UserDeleteResponse(User):

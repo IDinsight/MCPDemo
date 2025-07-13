@@ -10,3 +10,8 @@ Exports:
 These components-intro can be imported directly from the package for use in the
 application.
 """
+
+# Package Library
+from mcp_demo.scopes.routers import TAG_METADATA, router
+
+__all__ = ["router", "TAG_METADATA"]
