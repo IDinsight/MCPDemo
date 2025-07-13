@@ -204,6 +204,7 @@ async def delete_user_scope(
 @router.post("/register", response_model=UserCreateWithRecoveryCodes)
 @limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
 async def register(
+    calling_user_db: Annotated[UserDB, Depends(get_current_user)],
     request: Request,  # pylint: disable=W0613
     user: UserCreateWithPassword,
     asession: AsyncSession = Depends(get_async_session),
@@ -213,13 +214,16 @@ async def register(
     The process is as follows:
 
     1. If the username already exists, then raise a 400 error.
-    2. Generate recovery codes for the new user.
-    3. Save the user to the database with the recovery codes.
-    4. If no users exist in the database, create an 'admin' scope and assign it to the
+    2. Check if the calling user has permission to create users.
+    3. Generate recovery codes for the new user.
+    4. Save the user to the database with the recovery codes.
+    5. If no users exist in the database, create an 'admin' scope and assign it to the
         (first) user.
 
     Parameters
     ----------
+    calling_user_db
+        The user database object of the authenticated user, used to verify permissions.
     request
         The FastAPI request object. This is needed for SlowAPI rate limiting.
     user
@@ -236,6 +240,7 @@ async def register(
     ------
     HTTPException
         If the username already exists.
+        If the authenticated user does not have permission to create users.
     """
 
     # 1.
@@ -244,17 +249,27 @@ async def register(
             detail="User name already exists.", status_code=status.HTTP_400_BAD_REQUEST
         )
 
-    users_exist = await check_if_users_exist(asession=asession)
-
     # 2.
-    recovery_codes = generate_recovery_codes()
+    users_exist = await check_if_users_exist(asession=asession)
+    if users_exist:
+        calling_user_scopes = await get_user_scopes_by_id(
+            asession=asession, user_id=calling_user_db.user_id
+        )
+        if "admin" not in calling_user_scopes:
+            raise HTTPException(
+                detail="Insufficient permission to delete scopes.",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
 
     # 3.
+    recovery_codes = generate_recovery_codes()
+
+    # 4.
     user_db = await save_user_to_db(
         asession=asession, recovery_codes=recovery_codes, user=user
     )
 
-    # 4.
+    # 5.
     added_scopes = ["read"]
     if not users_exist:
         await add_scope_to_db(asession=asession, scope=ScopeCreate(name="admin"))
