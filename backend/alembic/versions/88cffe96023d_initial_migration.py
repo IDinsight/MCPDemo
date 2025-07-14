@@ -1,8 +1,8 @@
 """Initial migration.
 
-Revision ID: 4775dc98a864
+Revision ID: 88cffe96023d
 Revises:
-Create Date: 2025-07-12 14:26:57.969533
+Create Date: 2025-07-14 12:22:05.336131
 
 """
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "4775dc98a864"  # pragma: allowlist secret
+revision: str = "88cffe96023d"  # pragma: allowlist secret
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -36,6 +36,10 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
             nullable=False,
+        ),
+        sa.CheckConstraint(
+            "length(secret_hash) > 50",
+            name=op.f("ck_client_chk_client_secret_hash_len"),
         ),
         sa.PrimaryKeyConstraint("client_id", name=op.f("pk_client")),
     )
@@ -58,6 +62,10 @@ def upgrade() -> None:
         ),
         sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column("username", sa.String(length=64), nullable=False),
+        sa.CheckConstraint(
+            "length(password_hash) > 50",
+            name=op.f("ck_user_chk_user_password_hash_len"),
+        ),
         sa.PrimaryKeyConstraint("user_id", name=op.f("pk_user")),
         sa.UniqueConstraint("username", name=op.f("uq_user_username")),
     )

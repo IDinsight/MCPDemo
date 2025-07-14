@@ -22,6 +22,8 @@ services:
       - AUTH_RSA_PASSPHRASE=${AUTH_RSA_PASSPHRASE}
       - AUTH_TOKEN_ISSUER=https://tokens.local
       - AUTH_TOKEN_TTL=${AUTH_TOKEN_TTL}
+      - CHAT_ENV=dev
+      - FASTAPI_ENV=dev
       - LITELLM_ENDPOINT=http://litellm-proxy:4000
       - PATHS_PROJECT_DIR=/usr
       - PATHS_SECRETS_DIR=/usr/secrets
@@ -102,6 +104,7 @@ services:
       - AUTH_TOKEN_ISSUER=https://tokens.local
       - AUTH_TOKEN_TTL=${AUTH_TOKEN_TTL}
       - CHAT_ENV=dev
+      - FASTAPI_ENV=dev
       - LITELLM_ENDPOINT=http://litellm-proxy:4000
       - PATHS_PROJECT_DIR=/usr
       - PATHS_SECRETS_DIR=/usr/secrets

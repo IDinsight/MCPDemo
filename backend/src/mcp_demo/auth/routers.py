@@ -20,10 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mcp_demo.auth.schemas import IntrospectionResponse
 from mcp_demo.auth.utils import (
     ClientCredentialsRequestForm,
+    _verify_caller,
     get_cached_jwks,
     get_jwt_token,
     sanitize_scopes,
-    validate_token_and_get_claims,
 )
 from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.utils import Oauth2ClientNotFoundError, verify_client
@@ -73,15 +73,13 @@ async def get_jwks() -> JSONResponse:
     """
 
     jwks = await get_cached_jwks()
-    print(f"{jwks = }")
-    input()
     return JSONResponse(jwks)
 
 
 @router.post("/introspect", response_model=IntrospectionResponse)
 @limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
 async def introspect_token(
-    request: Request,  # pylint: disable=W0613
+    request: Request,
     asession: AsyncSession = Depends(get_async_session),
     credentials: HTTPBasicCredentials | None = Depends(basic_auth),
     token: str = Form(..., description="Access or refresh token to introspect"),
@@ -144,10 +142,17 @@ async def introspect_token(
     caller_db, jwt_options = await check_introspection_call(
         asession=asession, credentials=credentials
     )
+    if isinstance(caller_db, Oauth2ClientDB):
+        request.state.audit_sub = caller_db.client_id  # Machine account for logging
+    else:
+        request.state.audit_sub = caller_db.user_id  # Human user for logging
 
     # 3.
     try:
-        claims = await validate_token_and_get_claims(options=jwt_options, token=token)
+        claims = await _verify_caller(  # Introspection needs no scopes
+            options=jwt_options, redis_client=request.app.state.redis, token=token
+        )
+
     except HTTPException:
         return IntrospectionResponse(active=False)
 
@@ -305,10 +310,20 @@ async def token_endpoint(
                 sub=str(user_db.user_id),
             )
 
-            return TokenResponse(
+            token_response = TokenResponse(
                 access_token=token,
                 expires_in=Settings.AUTH_TOKEN_TTL,
                 token_type="bearer",
+            )
+            response = JSONResponse(content=token_response.model_dump())
+            secure = Settings.FASTAPI_ENV in ["dev", "prod"]  # Sent only over HTTPS
+            response.set_cookie(
+                httponly=True,  # Not visible to JS
+                key="access_token",
+                max_age=Settings.AUTH_TOKEN_TTL,
+                samesite="none" if secure else "lax",
+                secure=secure,
+                value=token,
             )
         case _:
             raise HTTPException(

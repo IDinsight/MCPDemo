@@ -348,6 +348,68 @@ async def register_first_user(
     )
 
 
+@router.get("/{user_id}", response_model=UserRetrieve)
+@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+async def get_user(
+    calling_user_db: Annotated[UserDB, Depends(get_current_user)],
+    request: Request,  # pylint: disable=W0613
+    user_id: int,
+    asession: AsyncSession = Depends(get_async_session),
+) -> UserRetrieve:
+    """Return a user profile iff the caller is the same `sub` *or* carries the `admin`
+    scope.
+
+    Parameters
+    ----------
+    calling_user_db
+        The user database object of the authenticated user, used to verify permissions.
+    request
+        The FastAPI request object. This is needed for SlowAPI rate limiting.
+    user_id
+        The user ID to retrieve.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+
+    Returns
+    -------
+    UserRetrieve
+        The user profile object containing user details.
+
+    Raises
+    ------
+    HTTPException
+        If the authenticated user does not have permission to view the user profile.
+        If the user ID does not exist in the database.
+    """
+
+    if calling_user_db.user_id != user_id:
+        caller_scopes = await get_user_scopes_by_id(
+            asession=asession, user_id=calling_user_db.user_id
+        )
+        if "admin" not in caller_scopes:
+            raise HTTPException(
+                detail=f"User ID not found: {user_id}.",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+    try:
+        target_user_db = await get_user_by_id(asession=asession, user_id=user_id)
+    except UserNotFoundError as exc:
+        raise HTTPException(
+            detail=f"User ID not found: {user_id}.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        ) from exc
+
+    return UserRetrieve(
+        created_datetime_utc=target_user_db.created_datetime_utc,
+        is_active=target_user_db.is_active,
+        scopes=[s.name for s in target_user_db.scopes],
+        updated_datetime_utc=target_user_db.updated_datetime_utc,
+        user_id=target_user_db.user_id,
+        username=target_user_db.username,
+    )
+
+
 @router.delete("/{user_id}", response_model=UserDeleteResponse)
 @limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
 async def delete_user(

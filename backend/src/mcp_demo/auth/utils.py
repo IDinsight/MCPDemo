@@ -74,7 +74,7 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     load_pem_public_key,
 )
-from fastapi import Depends, Form, HTTPException, Security, status
+from fastapi import Depends, Form, HTTPException, Request, Security, status
 from fastapi.openapi.models import (
     OAuthFlowClientCredentials,
     OAuthFlowPassword,
@@ -88,7 +88,7 @@ from redis import asyncio as aioredis
 
 # Package Library
 from mcp_demo.config import Settings
-from mcp_demo.utils.general import atomic_write, get_redis_client, make_dir
+from mcp_demo.utils.general import atomic_write, make_dir, sanitize_token
 
 _JWKS_CACHE: dict[str, Any] | None = None  # In-memory copy
 _JWKS_MTIME: float | None = None  # Last os.stat mtime
@@ -181,6 +181,41 @@ class ClientCredentialsRequestForm:
         self.username = username
 
 
+def _build_keys_by_kid(*, new_jwks: dict[str, Any]) -> dict[str, Any]:
+    """Build a dictionary mapping key IDs (kid) to JWKs and their compiled public keys.
+
+    Parameters
+    ----------
+    new_jwks
+        The JWKS (JSON Web Key Set) to process. This should be a dictionary containing
+        the keys, typically loaded from `jwks.json`.
+
+    Returns
+    -------
+    dict[str, Any]
+        A dictionary mapping each key ID (kid) to its corresponding JWK and compiled
+        public key in PEM format. The structure is:
+
+        {
+            "kid-1": {"jwk": {...}, "public_key": cryptography.PublicKey},
+            ...
+        }
+    """
+
+    keys_by_kid: dict[str, Any] = {}
+    for entry in new_jwks["keys"]:
+        kid = entry.get("kid")
+        if not kid:
+            continue
+        try:
+            compiled_key = jwk.construct(entry).to_pem()  # Bytes
+        except Exception as exc:  # Bad key material  # pylint: disable=W0718
+            logger.error(f"Unable to compile JWK {kid}: {exc}")
+            continue
+        keys_by_kid[kid] = {"jwk": entry, "public_key": compiled_key}
+    return keys_by_kid
+
+
 def _set_cache(*, mtime: float | None, new_jwks: dict[str, Any]) -> None:
     """Atomically replace the in-memory JWKS + mtime for *all* threads.
 
@@ -207,9 +242,9 @@ def _set_cache(*, mtime: float | None, new_jwks: dict[str, Any]) -> None:
 
 async def _verify_caller(
     *,
-    options: dict[str, Any],
-    redis_client: Annotated[aioredis.Redis, Depends(get_redis_client)],
-    required_scopes: set[str],
+    options: Optional[dict[str, Any]] = None,
+    redis_client: aioredis.Redis,
+    required_scopes: Optional[set[str]] = None,
     token: Annotated[str, Depends(oauth_2_multi_scheme)],
 ) -> dict[str, Any]:
     """Shared JWT verifier for **both** users and service-clients.
@@ -248,7 +283,10 @@ async def _verify_caller(
         headers={"WWW-Authenticate": "Bearer"},
         status_code=status.HTTP_401_UNAUTHORIZED,
     )
-    token = token.removeprefix("Bearer ").strip()
+    options = options or {}
+    options.update({"require_exp": True, "require_sub": True, "verify_signature": True})
+    required_scopes = required_scopes or set()
+    token = sanitize_token(token=token)
 
     try:
         header = jwt.get_unverified_header(token)
@@ -256,16 +294,19 @@ async def _verify_caller(
         if not kid:
             raise credentials_exception
         last_jwks = await load_jwks()
-        key = next(k for k in last_jwks["keys"] if k["kid"] == kid)
-        if not key:
-            raise credentials_exception
-        public_key = jwk.construct(key).to_pem().decode()
+        key_info = last_jwks["keys_by_kid"].get(kid, None)  # Cache the compiled key
+        if key_info is None:  # Try one forced refresh
+            jwks = await load_jwks(force_refresh=True)
+            key_info = jwks["keys_by_kid"].get(kid, None)
+            if key_info is None:
+                raise credentials_exception
         payload = jwt.decode(
             token,
-            public_key,
             algorithms=[AUTH_JWK_ALGORITHM],
             audience=AUTH_AUDIENCE,
             issuer=AUTH_TOKEN_ISSUER,
+            key=key_info["public_key"],
+            leeway=30,
             options=options,
         )
 
@@ -277,14 +318,16 @@ async def _verify_caller(
             REDIS_CACHE_PREFIX_JTI.format(jti=jti)
         ):
             raise credentials_exception
-    except (StopIteration, JWTError) as exc:
+    except (AssertionError, KeyError, StopIteration, JWTError) as exc:
+        raise credentials_exception from exc
+    except jwt.exceptions.ExpiredSignatureError as exc:
         raise credentials_exception from exc
 
     if not payload.get("sub"):
         raise credentials_exception
 
     # Enforce scopes.
-    token_scopes = {s for s in payload.get("scope", "").split() if s}
+    token_scopes = {s.strip().lower() for s in payload.get("scope", "").split()}
     if not required_scopes.issubset(token_scopes):
         raise HTTPException(
             detail="Not enough permissions", status_code=status.HTTP_403_FORBIDDEN
@@ -540,7 +583,9 @@ def jwk_from_public_key(
     }
 
 
-async def load_jwks(*, jwks_fn: str = AUTH_JWKS_FN) -> dict[str, Any]:
+async def load_jwks(
+    *, force_refresh: bool = False, jwks_fn: str = AUTH_JWKS_FN
+) -> dict[str, Any]:
     """Load the JSON Web Key Set (JWKS) from disk.
 
     NB: This function reads and parses the `jwks.json` file specified by
@@ -550,33 +595,68 @@ async def load_jwks(*, jwks_fn: str = AUTH_JWKS_FN) -> dict[str, Any]:
 
     Parameters
     ----------
+    force_refresh
+        If True, ignore the in-memory cache and re-read the file even when its mtime is
+        unchanged. Use this when a `kid` is missing and you suspect a background
+        key-rotation.
     jwks_fn
         The filename for the JWKS (JSON Web Key Set) file.
 
     Returns
     -------
     dict[str, Any]
-        The JWKS containing the keys, or an empty set if the file does not exist.
+        Cached JWKS in the form:
+        {
+            "keys": [... original list ...],
+            "keys_by_kid": {
+                "kid-1": {"jwk": {...}, "public_key": cryptography.PublicKey},
+                ...
+            }
+        }
     """
 
     jwks_fp = _SECRETS_DIR / jwks_fn
 
+    # Fast path.
+    if (
+        not force_refresh
+        and _JWKS_CACHE is not None
+        and jwks_fp.is_file()
+        and jwks_fp.stat().st_mtime == _JWKS_MTIME
+    ):
+        return _JWKS_CACHE  # Unchanged – return as-is
+
+    # Slow path --- acquire the process-wide lock and (re)load the file.
     async with process_lock():
-        if not jwks_fp.is_file():
-            _set_cache(mtime=None, new_jwks={"keys": []})
-            assert isinstance(_JWKS_CACHE, dict)
+        # Re-evaluate in case another coroutine refreshed while we were waiting.
+        if (
+            not force_refresh
+            and _JWKS_CACHE is not None
+            and jwks_fp.is_file()
+            and jwks_fp.stat().st_mtime == _JWKS_MTIME
+        ):
             return _JWKS_CACHE
 
-        mtime = jwks_fp.stat().st_mtime
-        if _JWKS_CACHE is None or _JWKS_MTIME != mtime:  # File changed or first read
+        if not jwks_fp.is_file():
+            new_jwks: dict[str, Any] = {"keys": []}
+            mtime: float | None = None
+        else:
+            mtime = jwks_fp.stat().st_mtime
             try:
-                new_jwks = json.loads(jwks_fp.read_text("utf-8"))
+                raw = json.loads(jwks_fp.read_text("utf-8"))
+                new_jwks = {"keys": raw.get("keys", [])}
             except json.JSONDecodeError:
-                logger.warning("Corrupted JWKS, regenerating")
-                new_jwks = {"keys": []}
-            _set_cache(mtime=mtime, new_jwks=new_jwks)  # Single, atomic swap
-        assert isinstance(_JWKS_CACHE, dict)
-        return _JWKS_CACHE
+                logger.warning("Corrupted JWKS on disk; regenerating empty set.")
+                new_jwks, mtime = {"keys": []}, None
+
+        # Build helper dict and pre-compile public keys.
+        new_jwks["keys_by_kid"] = _build_keys_by_kid(new_jwks=new_jwks)
+
+        # Atomic in-memory swap.
+        _set_cache(mtime=mtime, new_jwks=new_jwks)
+
+    assert isinstance(_JWKS_CACHE, dict)
+    return _JWKS_CACHE
 
 
 async def load_jwks_from_redis(
@@ -594,7 +674,14 @@ async def load_jwks_from_redis(
     Returns
     -------
     dict[str, Any]
-        The JWKS containing the public keys used to verify incoming JWTs.
+        Cached JWKS in the form:
+        {
+            "keys": [...],
+            "keys_by_kid": {
+                "kid-123": {"jwk": {...}, "public_key": bytes},
+                ...
+            }
+        }
 
     Raises
     ------
@@ -603,15 +690,17 @@ async def load_jwks_from_redis(
         configuration error.
     """
 
+    # Fast path.
     if _JWKS_CACHE is not None and not force_refresh:
         return _JWKS_CACHE  # Serve the in-process copy
 
+    # Slow path.
     raw = await redis_client.get(REDIS_CACHE_PREFIX_JWKS_CURRENT)
 
     if not raw:
-        async with process_lock():
+        async with process_lock():  # Acquire the process-wide lock
             raw = await redis_client.get(REDIS_CACHE_PREFIX_JWKS_CURRENT)
-        if not raw:
+        if not raw:  # Still missing --> first run
             await rotate_keys_with_redis(
                 keep_last_n=AUTH_ROTATION_KEEP_LAST_N,
                 key_size=AUTH_RSA_KEY_SIZE,
@@ -625,10 +714,17 @@ async def load_jwks_from_redis(
                     f"'{REDIS_CACHE_PREFIX_JWKS_CURRENT}' not set in Redis."
                 )
 
-    jwks = json.loads(raw)
+    try:
+        new_jwks: dict[str, Any] = {"keys": json.loads(raw)["keys"]}
+    except (json.JSONDecodeError, KeyError):
+        logger.warning("Corrupted JWKS in Redis; regenerating empty set.")
+        new_jwks = {"keys": []}
 
-    # Atomic swap into the per-process cache.
-    _set_cache(mtime=None, new_jwks=jwks)
+    # Build dict and pre-compile PEMs.
+    new_jwks["keys_by_kid"] = _build_keys_by_kid(new_jwks=new_jwks)
+
+    # Atomic in-process swap.
+    _set_cache(mtime=None, new_jwks=new_jwks)
 
     assert isinstance(_JWKS_CACHE, dict) and _JWKS_CACHE
 
@@ -770,6 +866,7 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
     """
 
     async def scope_checker(
+        request: Request,
         token: str | None = Security(
             oauth_2_multi_scheme, scopes=list(required_scopes)
         ),
@@ -782,6 +879,8 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
 
         Parameters
         ----------
+        request
+            The FastAPI request object.
         token
             The JWT token to validate and check for scopes.
 
@@ -798,13 +897,18 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
             required scopes.
         """
 
+        if token is None:  # Header absent
+            token = request.cookies.get("access_token", None)  # Check cookies
         if token is None:
             raise HTTPException(
                 detail="Not authenticated", status_code=status.HTTP_401_UNAUTHORIZED
             )
 
-        token = token.removeprefix("Bearer ").strip()
-        claims = await validate_token_and_get_claims(token=token)
+        claims = await _verify_caller(
+            redis_client=request.app.state.redis,
+            required_scopes=required_scopes,
+            token=token,
+        )
         token_scopes = claims.get("scope", "")
         if isinstance(token_scopes, str):
             token_scopes = {token_scopes}
@@ -815,6 +919,9 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
             raise HTTPException(
                 detail="Insufficient scope", status_code=status.HTTP_403_FORBIDDEN
             )
+
+        # Expose caller ID for audit purposes.
+        request.state.audit_sub = claims.get("sub")
 
         return claims
 
@@ -840,8 +947,9 @@ async def rotate_keys(
     4. Load the existing JWKS (JSON Web Key Set) from `jwks.json`.
     5. Add the new key to the JWKS, ensuring it is at the top of the list. Prune the
         oldest keys, keeping only the most recent `AUTH_ROTATION_KEEP_LAST_N` keys.
-    6. Save the updated JWKS back to `jwks.json`.
-    7. Update the in-memory cache of the JWKS and its last modified time so that the
+    6. Rebuild the helper map `keys_by_kid` to allow fast lookups by key ID (kid).
+    7. Save the updated JWKS back to `jwks.json`.
+    8. Update the in-memory cache of the JWKS and its last modified time so that the
         current process can use the new key immediately.
 
     Parameters
@@ -889,7 +997,7 @@ async def rotate_keys(
         )
 
         # 4.
-        jwks = deepcopy(await load_jwks(jwks_fn=jwks_fn))
+        jwks = deepcopy(await load_jwks(jwks_fn=jwks_fn, force_refresh=True))
         new_public_jwk = jwk_from_public_key(kid=kid, public_key=public_key)
         jwks["keys"].insert(0, new_public_jwk)  # Safe – private copy
 
@@ -908,9 +1016,19 @@ async def rotate_keys(
             )
 
         # 6.
-        await asyncio.to_thread(save_jwks, jwks=jwks, jwks_fn=jwks_fn)
+        keys_by_kid = {}
+        for entry in jwks["keys"]:
+            try:
+                compiled = jwk.construct(entry).to_pem()
+                keys_by_kid[entry["kid"]] = {"jwk": entry, "public_key": compiled}
+            except Exception as exc:  # pylint: disable=W0718
+                logger.error(f"Unable to compile JWK {entry['kid']}: {exc}")
+        jwks["keys_by_kid"] = keys_by_kid
 
         # 7.
+        await asyncio.to_thread(save_jwks, jwks=jwks, jwks_fn=jwks_fn)
+
+        # 8.
         mtime = (_SECRETS_DIR / jwks_fn).stat().st_mtime
         _set_cache(new_jwks=jwks, mtime=mtime)
 
@@ -939,8 +1057,9 @@ async def rotate_keys_with_redis(
     4. Load the existing JWKS (JSON Web Key Set) from Redis (or start empty).
     5. Insert the fresh public key at the head of the list.
     6. Prune the JWKS to keep only the most recent `keep_last_n` public keys.
-    7. Save the whole JWKS back to Redis in one atomic SET operation.
-    8. Refresh the in-memory cache for this process.
+    7. Rebuild the helper map `keys_by_kid` to allow fast lookups by key ID (kid).
+    8. Save the whole JWKS back to Redis in one atomic SET operation.
+    9. Refresh the in-memory cache for this process.
 
     Parameters
     ----------
@@ -999,11 +1118,21 @@ async def rotate_keys_with_redis(
         ]
 
         # 7.
+        keys_by_kid = {}
+        for entry in jwks["keys"]:
+            try:
+                compiled = jwk.construct(entry).to_pem()
+                keys_by_kid[entry["kid"]] = {"jwk": entry, "public_key": compiled}
+            except Exception as exc:  # pylint: disable=W0718
+                logger.error(f"Unable to compile JWK {entry['kid']}: {exc}")
+        jwks["keys_by_kid"] = keys_by_kid
+
+        # 8.
         await redis_client.set(
             REDIS_CACHE_PREFIX_JWKS_CURRENT, json.dumps(jwks, separators=(",", ":"))
         )
 
-        # 8.
+        # 9.
         _set_cache(mtime=None, new_jwks=jwks)
 
         return kid
@@ -1094,60 +1223,3 @@ def save_keypair(
     atomic_write(data=public_pem, target_fp=public_key_fp, mode="wb", perm=0o640)
 
     return private_key_fp, public_key_fp
-
-
-async def validate_token_and_get_claims(
-    *, options: Optional[dict[str, Any]] = None, token: str
-) -> dict[str, Any]:
-    """Validate a JWT token and return its claims.
-
-    This function decodes the JWT token, verifies its signature, checks its claims
-    (like audience, issuer, and expiration), and returns the payload if valid.
-
-    Parameters
-    ----------
-    options
-        Optional additional options for the JWT decoding process. This can include
-        settings like `verify_signature`, `verify_aud`, etc. If not provided, defaults
-        to verifying all standard claims.
-    token
-        The JWT token to decode and verify.
-
-    Returns
-    -------
-    dict[str, Any]
-        The decoded JWT payload if the token is valid.
-
-    Raises
-    ------
-    HTTPException
-        If the token is invalid, expired, or does not contain the required claims.
-    """
-
-    try:
-        header = jwt.get_unverified_header(token)
-        kid = header.get("kid")
-        assert kid
-        last_jwks = await load_jwks()
-        key = next(k for k in last_jwks["keys"] if k["kid"] == kid)
-        assert key
-        public_key = jwk.construct(key).to_pem().decode()
-        payload = jwt.decode(
-            token,
-            algorithms=[Settings.AUTH_JWK_ALGORITHM],
-            audience=Settings.AUTH_AUDIENCE,
-            key=public_key,
-            options=options,
-        )
-    except (
-        AssertionError,
-        KeyError,
-        StopIteration,
-        JWTError,
-        jwt.exceptions.ExpiredSignatureError,
-    ) as exc:
-        raise HTTPException(
-            detail="Invalid or expired token", status_code=status.HTTP_401_UNAUTHORIZED
-        ) from exc
-
-    return payload

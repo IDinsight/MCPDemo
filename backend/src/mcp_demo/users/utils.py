@@ -5,10 +5,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 # Third Party Library
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import SecurityScopes
 from loguru import logger
-from redis import asyncio as aioredis
 from sqlalchemy import delete, select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,12 +20,7 @@ from mcp_demo.scopes.models import ScopeDB, user_scope_table
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import User, UserCreateWithPassword, UserResetPassword
 from mcp_demo.utils.database import get_async_session
-from mcp_demo.utils.general import (
-    generate_hash,
-    generate_random_string,
-    get_redis_client,
-    verify_hash,
-)
+from mcp_demo.utils.general import generate_hash, generate_random_string, verify_hash
 
 
 class UserAlreadyExistsError(Exception):
@@ -264,8 +258,8 @@ async def delete_user_from_db(*, asession: AsyncSession, user_id: int) -> None:
 
 
 async def get_current_user(
+    request: Request,
     asession: AsyncSession = Depends(get_async_session),
-    redis_client: aioredis.Redis = Depends(get_redis_client),
     security_scopes: SecurityScopes = SecurityScopes(),
     token: str = Depends(oauth_2_multi_scheme),
 ) -> UserDB:
@@ -277,10 +271,10 @@ async def get_current_user(
 
     Parameters
     ----------
+    request
+        The FastAPI request object, used to access the Redis client.
     asession
         The SQLAlchemy async session to use for all database connections.
-    redis_client
-        The Redis client used to check the JTI (JWT ID) for replay attacks.
     security_scopes
         The security scopes required for the operation, used to check if the token
         has the necessary permissions.
@@ -299,8 +293,7 @@ async def get_current_user(
     """
 
     payload = await _verify_caller(
-        options={"require": ["exp", "sub"]},
-        redis_client=redis_client,
+        redis_client=request.app.state.redis,
         required_scopes=set(security_scopes.scopes),
         token=token,
     )
@@ -318,6 +311,8 @@ async def get_current_user(
             detail="Could not validate credentials",
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
+
+    request.state.audit_sub = user_db.user_id  # Expose caller ID for auditing
 
     return user_db
 
@@ -571,11 +566,15 @@ async def verify_recovery_code(
     """
 
     for recovery_code_hash in user_db.recovery_codes_hash:
-        verified, _ = verify_hash(text=recovery_code, hashed=recovery_code_hash)
+        verified, hashed_recovery_code = verify_hash(
+            text=recovery_code, hashed=recovery_code_hash
+        )
         if verified:
             user_db.recovery_codes_hash.remove(recovery_code_hash)  # One-time use
             await asession.commit()
             return True
+        index = user_db.recovery_codes_hash.index(recovery_code_hash)
+        user_db.recovery_codes_hash[index] = hashed_recovery_code
     return False
 
 

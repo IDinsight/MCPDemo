@@ -4,10 +4,9 @@
 from typing import Any
 
 # Third Party Library
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import SecurityScopes
 from loguru import logger
-from redis import asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +16,7 @@ from mcp_demo.auth.utils import _verify_caller, oauth_2_multi_scheme
 from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.schemas import OAuth2ClientCreate
 from mcp_demo.utils.database import get_async_session
-from mcp_demo.utils.general import generate_hash, get_redis_client, verify_hash
+from mcp_demo.utils.general import generate_hash, verify_hash
 
 
 class Oauth2ClientNotFoundError(Exception):
@@ -154,8 +153,8 @@ async def get_client_by_id(*, asession: AsyncSession, client_id: str) -> Oauth2C
 
 
 async def get_current_client(
+    request: Request,
     asession: AsyncSession = Depends(get_async_session),
-    redis_client: aioredis.Redis = Depends(get_redis_client),
     security_scopes: SecurityScopes = SecurityScopes(),
     token: str = Depends(oauth_2_multi_scheme),
 ) -> Oauth2ClientDB:
@@ -167,8 +166,8 @@ async def get_current_client(
 
     Parameters
     ----------
-    redis_client
-        The Redis client used to check the JTI (JWT ID) for replay attacks.
+    request
+        The FastAPI request object, used to access the Redis client.
     asession
         The SQLAlchemy async session to use for all database connections.
     security_scopes
@@ -189,14 +188,7 @@ async def get_current_client(
     """
 
     payload = await _verify_caller(
-        options={
-            "verify_aud": True,
-            "verify_exp": True,
-            "verify_iat": True,
-            "verify_iss": True,
-            "verify_nbf": True,
-        },
-        redis_client=redis_client,
+        redis_client=request.app.state.redis,
         required_scopes=set(security_scopes.scopes),
         token=token,
     )

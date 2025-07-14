@@ -56,6 +56,7 @@ class BackendSettings(BaseSettings):
     LOGGING_LOG_LEVEL: str = "INFO"
 
     # FastAPI
+    FASTAPI_ENV: str = "local"
     FASTAPI_HOST: str = "0.0.0.0"
     FASTAPI_PORT: int = 8000
 

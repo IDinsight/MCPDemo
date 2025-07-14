@@ -13,6 +13,7 @@ import re
 import secrets
 import string
 
+from copy import deepcopy
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -23,9 +24,7 @@ import yaml
 from argon2 import PasswordHasher
 from argon2 import exceptions as argon2_exc
 from argon2.low_level import Type
-from fastapi import Request
 from loguru import logger
-from redis import asyncio as aioredis
 
 # Tuned for 64 MiB & 2 rounds ≈ 120 ms on AWS t4g.medium.
 _PH = PasswordHasher(
@@ -231,23 +230,6 @@ def generate_recovery_codes(*, code_length: int = 20, num_codes: int = 5) -> lis
     return recovery_codes
 
 
-async def get_redis_client(request: Request) -> aioredis.Redis:
-    """Return the Redis client stored on app.state (created at startup).
-
-    Parameters
-    ----------
-    request
-        The FastAPI request object.
-
-    Returns
-    -------
-    aioredis.Redis
-        The Redis client instance.
-    """
-
-    return request.app.state.redis
-
-
 def make_dir(dir_: str | Path, mode: int = 0o777, verbose: bool = True) -> None:
     """Create a directory.
 
@@ -306,6 +288,36 @@ def recurse_replace(new_str: str, orig_str: str, x: Any) -> Any:
     return x
 
 
+def redact_tokens(record: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow-copied record with JWTs / Bearer tokens replaced.
+
+    Parameters
+    ----------
+    record
+        The log record to redact.
+
+    Returns
+    -------
+    dict[str, Any]
+        The log record with tokens redacted.
+    """
+
+    _TOKEN_RE = re.compile(
+        r"(?i)\b(?:bearer\s+)?([A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+)"
+    )
+
+    record = deepcopy(record)
+    record["message"] = _TOKEN_RE.sub("<redacted>", record["message"])
+
+    # Redact the same way inside extra dict if user code added a header dump.
+    if "headers" in record["extra"]:
+        record["extra"]["headers"] = _TOKEN_RE.sub(
+            "<redacted>", str(record["extra"]["headers"])
+        )
+
+    return record
+
+
 def remove_json_markdown(*, text: str) -> str:
     """Remove JSON markdown from text.
 
@@ -324,6 +336,23 @@ def remove_json_markdown(*, text: str) -> str:
     text = re.sub(r"```(json)?\n", "", text).rstrip("```")
     text = text.replace(r"\{", "{").replace(r"\}", "}")
     return text.strip()
+
+
+def sanitize_token(*, token: str) -> str:
+    """Sanitize a token by removing the "Bearer " prefix and stripping whitespace.
+
+    Parameters
+    ----------
+    token
+        The token string to sanitize.
+
+    Returns
+    -------
+    str
+        The sanitized token string.
+    """
+
+    return token.removeprefix("Bearer ").strip()
 
 
 def verify_hash(*, text: str, hashed: str) -> tuple[bool, str | None]:

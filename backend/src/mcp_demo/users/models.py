@@ -5,7 +5,7 @@
 from datetime import datetime, timezone
 
 # Third Party Library
-from sqlalchemy import ARRAY, Boolean, DateTime, Integer, String
+from sqlalchemy import ARRAY, Boolean, CheckConstraint, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -38,6 +38,12 @@ class UserDB(Base):
         Unique login name; indexed and case-sensitive.
     """
 
+    # Reject any password hash that is too short
+    __table_args__ = (
+        CheckConstraint(
+            "length(password_hash) > 50", name="chk_user_password_hash_len"
+        ),
+    )
     __tablename__ = "user"
 
     created_datetime_utc: Mapped[datetime] = mapped_column(

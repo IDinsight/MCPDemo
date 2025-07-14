@@ -1,6 +1,14 @@
 {$DEV_CADDY_DOMAIN_NAME:localhost} {
+    # FastAPI
     handle_path {$DEV_CADDY_BACKEND_ROOT_API:}/api/* {
         reverse_proxy api:{$DEV_FASTAPI_PORT} {
+
+            # Pass the real IP, drop client supplied values
+            header_up  -X-Forwarded-For                # Strip incoming header
+			header_up  X-Forwarded-For  {remote_host}  # Add the true client IP
+			header_up  X-Real-IP       {remote_host}   # For some libs (optional)
+			header_up  X-Forwarded-Proto {scheme}      # Let app know it's HTTPS
+
             transport http {
                 dial_timeout 100s
                 read_timeout 100s
@@ -8,8 +16,17 @@
             }
         }
     }
+
+    # FastMCP
     handle_path {$DEV_CADDY_BACKEND_ROOT_MCP:}/mcp/* {
         reverse_proxy mcp:{$DEV_FASTMCP_PORT} {
+
+            # Same header hygiene
+            header_up  -X-Forwarded-For
+			header_up  X-Forwarded-For  {remote_host}
+			header_up  X-Real-IP       {remote_host}
+			header_up  X-Forwarded-Proto {scheme}
+
             transport http {
                 dial_timeout 100s
                 read_timeout 100s

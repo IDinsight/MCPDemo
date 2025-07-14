@@ -38,7 +38,7 @@ ENV PYTHONPATH="${PYTHONPATH}:${HOME_DIR}/src"
 # Install only required system libraries (no compilers, no git).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    libpq-dev \
+    libpq5 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -52,6 +52,10 @@ COPY --from=build /usr/src /usr/src
 # Set working directory.
 WORKDIR ${HOME_DIR}
 
-# Expose port for visibility and run default command.
+# Expose port for visibility.
 EXPOSE 8000
-CMD ["uv", "run", "src/mcp_demo/entries/fastapi_app.py", "--no-reload"]
+
+# Proxy-aware launch.
+# 1. --proxy-headers tells Starlette to trust X-Forwarded-* once validated.
+# 2. --forwarded-allow-ips=* narrows trust to in-cluster traffic only
+CMD ["uv", "run", "src/mcp_demo/entries/fastapi_app.py", "--no-reload", "--proxy-headers", "--forwarded-allow-ips", "172.19.0.0/16,127.0.0.1,::1"]

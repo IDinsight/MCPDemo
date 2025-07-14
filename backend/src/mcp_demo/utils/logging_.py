@@ -19,7 +19,7 @@ from loguru import logger
 # Package Library
 from mcp_demo.config import Settings
 from mcp_demo.schemas import Valid
-from mcp_demo.utils.general import escape_angle_brackets
+from mcp_demo.utils.general import escape_angle_brackets, redact_tokens
 
 _LOGGER_INITIALIZED = False
 LOGGING_LOG_LEVEL = Settings.LOGGING_LOG_LEVEL
@@ -182,10 +182,12 @@ def initialize_logger(
             {
                 "backtrace": True,
                 "colorize": True,
-                "diagnose": True,
+                "diagnose": Settings.FASTAPI_ENV == "local",
                 "enqueue": True,
+                "filter": redact_tokens,
                 "format": "<g>{time:YYYY-MM-DD HH:mm:ss}</g> | <level>{level.icon} {message}</level>",
                 "level": logging_level,
+                "serialize": False,
                 "sink": sys.stderr,
             },
         ]
@@ -195,9 +197,13 @@ def initialize_logger(
             {
                 "backtrace": True,
                 "delay": True,
-                "diagnose": True,
+                "diagnose": Settings.FASTAPI_ENV == "local",
                 "encoding": "utf-8",
+                "enqueue": True,
+                "filter": redact_tokens,
                 "level": logging_level,
+                "rotation": "10 MB",
+                "serialize": True,
                 "sink": log_fp,
             },
         )

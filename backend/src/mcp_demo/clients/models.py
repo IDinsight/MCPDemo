@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 # Third Party Library
-from sqlalchemy import ARRAY, Boolean, DateTime, String
+from sqlalchemy import ARRAY, Boolean, CheckConstraint, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -30,6 +30,9 @@ class Oauth2ClientDB(Base):
         Secure hash of the client's secret, stored for authentication.
     """
 
+    __table_args__ = (
+        CheckConstraint("length(secret_hash) > 50", name="chk_client_secret_hash_len"),
+    )
     __tablename__ = "client"
 
     client_id: Mapped[str] = mapped_column(
