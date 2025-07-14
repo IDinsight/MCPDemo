@@ -102,10 +102,12 @@ _SECRETS_DIR = Path(PATHS_PROJECT_DIR) / "secrets"
 make_dir(_SECRETS_DIR, mode=0o700)
 _LOCK = FileLock(str(_SECRETS_DIR / ".rotate.lock"), timeout=2)
 
+AUTH_ALLOWED_SCOPES = Settings.AUTH_ALLOWED_SCOPES
 AUTH_AUDIENCE = Settings.AUTH_AUDIENCE
 AUTH_FILELOCK_TIMEOUT = Settings.AUTH_FILELOCK_TIMEOUT
 AUTH_JWK_ALGORITHM = Settings.AUTH_JWK_ALGORITHM
 AUTH_JWKS_FN = Settings.AUTH_JWKS_FN
+AUTH_RSA_PASSPHRASE = Settings.AUTH_RSA_PASSPHRASE
 AUTH_ROTATION_KEEP_LAST_N = Settings.AUTH_ROTATION_KEEP_LAST_N
 AUTH_RSA_KEY_SIZE = Settings.AUTH_RSA_KEY_SIZE
 AUTH_RSA_PUBLIC_EXPONENT = Settings.AUTH_RSA_PUBLIC_EXPONENT
@@ -543,12 +545,12 @@ async def get_jwt_token(
     """
 
     # 1.
-    invalid_scopes = set(scopes) - Settings.AUTH_ALLOWED_SCOPES
+    invalid_scopes = set(scopes) - AUTH_ALLOWED_SCOPES
     if invalid_scopes:
         raise ValueError(f"Unrecognised scopes requested: {', '.join(invalid_scopes)}")
 
     # 2.
-    passphrase = passphrase or Settings.AUTH_RSA_PASSPHRASE.get_secret_value()
+    passphrase = passphrase or AUTH_RSA_PASSPHRASE.get_secret_value()
     private_key, kid = await get_latest_private_key_and_kid(
         jwks_fn=jwks_fn, passphrase=passphrase
     )
@@ -1304,11 +1306,23 @@ def sanitize_scopes(*, requested_scopes: list[str] | None) -> list[str]:
     -------
     list[str]
         A list of sanitized scopes that are allowed by the authentication service.
+
+    Raises
+    ------
+    HTTPException
+        If any of the requested scopes are not allowed by the authentication service.
     """
 
-    allowed = Settings.AUTH_ALLOWED_SCOPES
-    requested = set(requested_scopes or [])
-    return list(allowed & requested)
+    requested_scopes = requested_scopes or []
+    invalid = set(requested_scopes) - AUTH_ALLOWED_SCOPES
+
+    if invalid:
+        raise HTTPException(
+            detail=f"Unknown scope(s): {', '.join(sorted(invalid))}",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    return list(sorted(set(requested_scopes)))
 
 
 def save_jwks(*, jwks: dict[str, Any], jwks_fn: str = AUTH_JWKS_FN) -> None:

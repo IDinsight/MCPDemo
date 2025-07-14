@@ -83,11 +83,12 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 token = request.cookies.get("access_token", "")
 
             try:
-                sub = await _verify_caller(
+                payload = await _verify_caller(
                     redis_client=request.app.state.redis,
                     required_scopes=set(),  # No scopes needed for audit
                     token=token,
-                )["sub"]
+                )
+                sub = payload["sub"]
             except Exception:  # pylint: disable=W0718
                 sub = "anonymous"
 

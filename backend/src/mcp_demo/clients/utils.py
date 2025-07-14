@@ -15,25 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mcp_demo.auth.utils import _verify_caller, oauth_2_multi_scheme
 from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.schemas import OAuth2ClientCreate
+from mcp_demo.config import Settings
 from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.general import generate_hash, verify_hash
 
-
-class Oauth2ClientNotFoundError(Exception):
-    """Custom exception raised when a client is not found in the database."""
-
-    def __init__(self, *, error_msg: str) -> None:
-        """
-
-        Parameters
-        ----------
-        error_msg
-            The error message.
-        """
-
-        super().__init__(f"Client not found: {error_msg}")
-
-        self.error_msg = error_msg
+AUTH_ALLOWED_SCOPES = Settings.AUTH_ALLOWED_SCOPES
 
 
 class Oauth2ClientDBClientAlreadyExistsError(Exception):
@@ -49,6 +35,40 @@ class Oauth2ClientDBClientAlreadyExistsError(Exception):
         """
 
         super().__init__(f"OAuth2 client already exists: {error_msg}")
+
+        self.error_msg = error_msg
+
+
+class Oauth2ClientDBInvalidScopesError(Exception):
+    """Custom exception raised when the provided scopes are not allowed."""
+
+    def __init__(self, *, error_msg: str) -> None:
+        """
+
+        Parameters
+        ----------
+        error_msg
+            A human-readable description of the error condition.
+        """
+
+        super().__init__(f"Invalid scopes: {error_msg}")
+
+        self.error_msg = error_msg
+
+
+class Oauth2ClientNotFoundError(Exception):
+    """Custom exception raised when a client is not found in the database."""
+
+    def __init__(self, *, error_msg: str) -> None:
+        """
+
+        Parameters
+        ----------
+        error_msg
+            The error message.
+        """
+
+        super().__init__(f"Client not found: {error_msg}")
 
         self.error_msg = error_msg
 
@@ -232,6 +252,8 @@ async def save_client_to_db(
     ------
     Oauth2ClientDBClientAlreadyExistsError
         If a client with the same client ID already exists in the database.
+    Oauth2ClientDBInvalidScopesError
+        If the provided scopes are not allowed.
     """
 
     existing_client = await check_if_client_exists(asession=asession, client=client)
@@ -239,6 +261,11 @@ async def save_client_to_db(
     if existing_client is not None:
         raise Oauth2ClientDBClientAlreadyExistsError(
             error_msg=f"OAuth2 client ID already exists: {existing_client.client_id}"
+        )
+
+    if client.scopes not in AUTH_ALLOWED_SCOPES:
+        raise Oauth2ClientDBInvalidScopesError(
+            error_msg=f"Invalid scopes: {client.scopes}."
         )
 
     client_db = Oauth2ClientDB(

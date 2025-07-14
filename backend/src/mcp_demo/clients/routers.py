@@ -80,6 +80,8 @@ async def register(
     This endpoint is intended for administrative use to provision new service clients.
     Each client is stored with a hashed `secret` and associated scopes.
 
+    NB: This endpoint is currently unguarded---anyone can create a new client.
+
     The process is as follows:
 
     1. Validate that the `client_id` does not already exist.

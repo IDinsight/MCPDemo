@@ -79,49 +79,26 @@ down-redis: ## Tear down Redis container
 ########## DOCKER ##########
 # WARNING: this deletes **all** local Docker data. Use with caution!
 clean-docker: ## Remove every container, image, volume, network, build cache & history
-	# Stop and delete all containers
+	@echo "$(RED)Stopping and deleting all containers...$(RESET)"
 	-@docker stop $$(docker ps -q) 2>/dev/null || true
 	-@docker rm -f $$(docker ps -aq) 2>/dev/null || true
-
-	# Tear down every docker-compose project
+	@echo "$(RED)Tearing down every docker-compose project...$(RESET)"
 	-@for p in $$(docker compose ls --format '{{.Name}}'); do \
 		docker compose -p $$p down --rmi all --volumes --remove-orphans ; \
 	done
-
-	# Prune dangling images, networks and anonymous volumes
+	@echo "$(RED)Pruning dangling images, networks, and anonymous volumes...$(RESET)"
 	-@docker system prune -a --volumes -f
-
-	# Force-delete *all* named volumes (e.g. pgvector_data)
+	@echo "$(RED)Force deleting all named volumes...$(RESET)"
 	-@docker volume rm -f $$(docker volume ls -q) 2>/dev/null || true
-
-	# Clean BuildKit layer caches for every builder
+	@echo "$(RED)Cleaninng BuildKit layer caches for every builder...$(RESET)"
 	-@for b in $$(docker buildx ls --format '{{.Name}}'); do \
 		docker buildx prune -af --builder $$b ; \
 	done 2>/dev/null || true
-
-	# Remove Buildx “Builds” history records shown in Docker Desktop
+	@echo "$(RED)Removing Buildx 'Builds' history records shown in Docker Desktop...$(RESET)"
 	-@for b in $$(docker buildx ls --format '{{.Name}}'); do \
 		docker buildx history rm --all --builder $$b ; \
 	done 2>/dev/null || true
-
 	@echo "Docker Desktop is now squeaky-clean ✔"
-
-#clean-docker: ## Remove every container, image, volume, network & compose cache
-#	@echo "$(RED)Stopping any running containers...$(RESET)"
-#	-@docker stop $$(docker ps -q) 2>/dev/null || true
-#	@echo "$(RED)Removing all containers...$(RESET)"
-#	-@docker rm -f $$(docker ps -aq) 2>/dev/null || true
-#	@echo "$(RED)Tearing down every docker-compose project...$(RESET)"
-#	-@for p in $$(docker compose ls --format '{{.Name}}' 2>/dev/null); do \
-#		docker compose -p $$p down --rmi all --volumes --remove-orphans ; \
-#	done
-#	@echo "$(RED)Pruning images, networks and anonymous volumes...$(RESET)"
-#	-@docker system prune -a --volumes -f
-#	@echo "$(RED)Force-deleting **all** named volumes (e.g., pgvector_data)...$(RESET)"
-#	-@docker volume rm -f $$(docker volume ls -q) 2>/dev/null || true
-#	@echo "$(RED)Clearing BuildKit / buildx cache...$(RESET)"
-#	-@docker builder prune -a -f 2>/dev/null || true
-#	@echo "$(GREEN)Docker Desktop is now squeaky-clean ✔$(RESET)"
 
 # Dev
 up-dev: ## Set up the development environment by starting all containers using Docker compose

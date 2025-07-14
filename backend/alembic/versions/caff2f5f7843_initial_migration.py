@@ -1,8 +1,8 @@
 """Initial migration.
 
-Revision ID: 4012afd8e48f
+Revision ID: caff2f5f7843
 Revises:
-Create Date: 2025-07-14 16:06:38.623465
+Create Date: 2025-07-14 16:50:34.078516
 
 """
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "4012afd8e48f"  # pragma: allowlist secret
+revision: str = "caff2f5f7843"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -45,7 +45,14 @@ def upgrade() -> None:
     )
     op.create_table(
         "scope",
+        sa.Column("created_datetime_utc", sa.DateTime(timezone=True), nullable=False),
         sa.Column("name", sa.String(length=50), nullable=False),
+        sa.Column(
+            "updated_datetime_utc",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("name", name=op.f("pk_scope")),
     )
     op.create_table(

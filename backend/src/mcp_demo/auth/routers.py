@@ -20,7 +20,11 @@ from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
-from mcp_demo.auth.schemas import IntrospectionResponse, RefreshTokenRequestForm
+from mcp_demo.auth.schemas import (
+    IntrospectionResponse,
+    RefreshTokenRequestForm,
+    TokenResponse,
+)
 from mcp_demo.auth.utils import (
     ClientCredentialsRequestForm,
     _verify_caller,
@@ -33,7 +37,6 @@ from mcp_demo.auth.utils import (
 from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.utils import Oauth2ClientNotFoundError, verify_client
 from mcp_demo.config import Settings
-from mcp_demo.schemas import TokenResponse
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.utils import UserNotFoundError, get_user_scopes_by_id, verify_user
 from mcp_demo.utils.database import get_async_session
