@@ -208,7 +208,7 @@ def _build_keys_by_kid(*, new_jwks: dict[str, Any]) -> dict[str, Any]:
         if not kid:
             continue
         try:
-            compiled_key = jwk.construct(entry).to_pem()  # Bytes
+            compiled_key = jwk.construct(entry).to_pem().decode()  # String
         except Exception as exc:  # Bad key material  # pylint: disable=W0718
             logger.error(f"Unable to compile JWK {kid}: {exc}")
             continue
@@ -249,6 +249,8 @@ async def _verify_caller(
 ) -> dict[str, Any]:
     """Shared JWT verifier for **both** users and service-clients.
 
+    NB: The `jwt` library to use here is from `jose`, not the one from `PyJWT`.
+
     Parameters
     ----------
     options
@@ -284,7 +286,9 @@ async def _verify_caller(
         status_code=status.HTTP_401_UNAUTHORIZED,
     )
     options = options or {}
-    options.update({"require_exp": True, "require_sub": True, "verify_signature": True})
+    if options.get("verify_aud") is False:
+        raise ValueError("Disabling aud verification is not allowed")
+    options.update({"require_exp": True, "verify_signature": True})
     required_scopes = required_scopes or set()
     token = sanitize_token(token=token)
 
@@ -319,8 +323,6 @@ async def _verify_caller(
         ):
             raise credentials_exception
     except (AssertionError, KeyError, StopIteration, JWTError) as exc:
-        raise credentials_exception from exc
-    except jwt.exceptions.ExpiredSignatureError as exc:
         raise credentials_exception from exc
 
     if not payload.get("sub"):
@@ -852,6 +854,8 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
     allowed to proceed. If the token is invalid or does not have the required scopes,
     it raises an HTTPException with a 403 Forbidden status code.
 
+    NB: We also expose the caller ID (sub) in the request state for audit purposes.
+
     Parameters
     ----------
     required_scopes
@@ -909,7 +913,7 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
             required_scopes=required_scopes,
             token=token,
         )
-        token_scopes = claims.get("scope", "")
+        token_scopes = {s.strip().lower() for s in claims.get("scope", "").split()}
         if isinstance(token_scopes, str):
             token_scopes = {token_scopes}
         elif isinstance(token_scopes, list):
@@ -1016,14 +1020,7 @@ async def rotate_keys(
             )
 
         # 6.
-        keys_by_kid = {}
-        for entry in jwks["keys"]:
-            try:
-                compiled = jwk.construct(entry).to_pem()
-                keys_by_kid[entry["kid"]] = {"jwk": entry, "public_key": compiled}
-            except Exception as exc:  # pylint: disable=W0718
-                logger.error(f"Unable to compile JWK {entry['kid']}: {exc}")
-        jwks["keys_by_kid"] = keys_by_kid
+        jwks["keys_by_kid"] = _build_keys_by_kid(new_jwks=jwks)
 
         # 7.
         await asyncio.to_thread(save_jwks, jwks=jwks, jwks_fn=jwks_fn)
@@ -1118,14 +1115,7 @@ async def rotate_keys_with_redis(
         ]
 
         # 7.
-        keys_by_kid = {}
-        for entry in jwks["keys"]:
-            try:
-                compiled = jwk.construct(entry).to_pem()
-                keys_by_kid[entry["kid"]] = {"jwk": entry, "public_key": compiled}
-            except Exception as exc:  # pylint: disable=W0718
-                logger.error(f"Unable to compile JWK {entry['kid']}: {exc}")
-        jwks["keys_by_kid"] = keys_by_kid
+        jwks["keys_by_kid"] = _build_keys_by_kid(new_jwks=jwks)
 
         # 8.
         await redis_client.set(
