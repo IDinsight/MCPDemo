@@ -54,8 +54,10 @@ from __future__ import annotations
 # Standard Library
 import asyncio
 import base64
+import hashlib
 import json
 import os
+import secrets
 import time
 
 from contextlib import asynccontextmanager
@@ -63,10 +65,10 @@ from copy import deepcopy
 from pathlib import Path
 from secrets import token_hex
 from threading import Lock
-from typing import Annotated, Any, AsyncIterator, Callable, Optional, cast
+from typing import Annotated, Any, AsyncIterator, Awaitable, Callable, Optional, cast
 
 # Third Party Library
-import jwt
+import jwt as pyjwt
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -82,7 +84,7 @@ from fastapi.openapi.models import (
 )
 from fastapi.security import OAuth2
 from filelock import FileLock
-from jose import JWTError, jwk
+from jose import JWTError, jwk, jwt
 from loguru import logger
 from redis import asyncio as aioredis
 
@@ -108,9 +110,12 @@ AUTH_ROTATION_KEEP_LAST_N = Settings.AUTH_ROTATION_KEEP_LAST_N
 AUTH_RSA_KEY_SIZE = Settings.AUTH_RSA_KEY_SIZE
 AUTH_RSA_PUBLIC_EXPONENT = Settings.AUTH_RSA_PUBLIC_EXPONENT
 AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
+AUTH_TOKEN_REFRESH_TTL = Settings.AUTH_TOKEN_REFRESH_TTL
 AUTH_TOKEN_TTL = Settings.AUTH_TOKEN_TTL
 REDIS_CACHE_PREFIX_JTI = Settings.REDIS_CACHE_PREFIX_JTI
 REDIS_CACHE_PREFIX_JWKS_CURRENT = Settings.REDIS_CACHE_PREFIX_JWKS_CURRENT
+REDIS_CACHE_PREFIX_SUB_JTIS = Settings.REDIS_CACHE_PREFIX_SUB_JTIS
+REDIS_CACHE_PREFIX_REFRESH_TOKEN = Settings.REDIS_CACHE_PREFIX_REFRESH_TOKEN
 
 oauth_2_multi_scheme = OAuth2(
     auto_error=False,  # Do not raise 401 automatically, we handle it manually
@@ -240,6 +245,33 @@ def _set_cache(*, mtime: float | None, new_jwks: dict[str, Any]) -> None:
         _JWKS_MTIME = mtime
 
 
+async def _store_refresh_token(
+    *, payload: dict[str, Any], redis_client: aioredis.Redis, token_plain: str
+) -> None:
+    """Hash and persist a one‑time refresh token.
+
+    Parameters
+    ----------
+    payload
+        The payload to store in Redis, typically containing user information and
+        token metadata.
+    redis_client
+        The Redis client used to store the refresh token.
+    token_plain
+        The plain text refresh token to hash and store. This is the token that will be
+        used to refresh the access token in the future.
+    """
+
+    token_hash = hashlib.sha256(token_plain.encode(), usedforsecurity=True).hexdigest()
+    key = REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(hash=token_hash)
+    await redis_client.set(
+        ex=AUTH_TOKEN_REFRESH_TTL,
+        name=key,
+        nx=True,
+        value=json.dumps(payload, separators=(",", ":")),
+    )
+
+
 async def _verify_caller(
     *,
     options: Optional[dict[str, Any]] = None,
@@ -304,7 +336,7 @@ async def _verify_caller(
             key_info = jwks["keys_by_kid"].get(kid, None)
             if key_info is None:
                 raise credentials_exception
-        payload = jwt.decode(
+        payload = pyjwt.decode(
             token,
             algorithms=[AUTH_JWK_ALGORITHM],
             audience=AUTH_AUDIENCE,
@@ -355,6 +387,53 @@ def b64url(*, data: bytes) -> str:
     """
 
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+async def generate_refresh_token(
+    *,
+    client_id: str | None,
+    redis_client: aioredis.Redis,
+    scopes: list[str],
+    sub: str,
+) -> tuple[str, int]:
+    """Create a long‑lived, one‑time refresh token and persist it hashed.
+
+    Parameters
+    ----------
+    client_id
+        The client ID for which the refresh token is being generated. This is typically
+        the ID of the client application that is requesting the token.
+    redis_client
+        The Redis client used to store the refresh token. This is used to persist the
+        token securely and allow for later retrieval.
+    scopes
+        A list of scopes that the refresh token will grant access to. Scopes define the
+        permissions associated with the token, such as read or write access.
+    sub
+        The subject for which the refresh token is being generated, typically a user ID
+        or client ID. This identifies the entity that the token will be associated with.
+
+    Returns
+    -------
+    tuple[str, int]
+        A tuple containing the generated refresh token as a string and its TTL (time to
+        live) in seconds. The refresh token is a long-lived token that can be used to
+        obtain new access tokens without requiring the user to re-authenticate.
+    """
+
+    refresh_token = secrets.token_urlsafe(64)
+    payload = {
+        "client_id": client_id,
+        "scope": " ".join(scopes),
+        "exp": int(time.time()) + AUTH_TOKEN_REFRESH_TTL,
+        "sub": sub,
+    }
+
+    await _store_refresh_token(
+        payload=payload, redis_client=redis_client, token_plain=refresh_token
+    )
+
+    return refresh_token, AUTH_TOKEN_REFRESH_TTL
 
 
 def generate_rsa_keypair(
@@ -435,7 +514,8 @@ async def get_jwt_token(
     Parameters
     ----------
     grant_type
-        The OAuth2 grant type, must be 'client_credentials' or 'password'.
+        The OAuth2 grant type, (e.g., 'client_credentials', 'password',
+        'refresh_token').
     jwks_fn
         The filename for the JWKS (JSON Web Key Set) file. This is only used for
         generating a new key if the JWKS file is empty.
@@ -496,7 +576,7 @@ async def get_jwt_token(
         # 4.
         token = cast(
             str,
-            jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid}),
+            pyjwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid}),
         )
 
         # 5.
@@ -507,6 +587,13 @@ async def get_jwt_token(
             value=sub,
         )
         if is_set:
+            subj_set_key = REDIS_CACHE_PREFIX_SUB_JTIS.format(sub=sub)
+            await cast(
+                Awaitable[int],
+                redis_client.sadd(subj_set_key, REDIS_CACHE_PREFIX_JTI.format(jti=jti)),
+            )
+            await redis_client.expire(subj_set_key, Settings.AUTH_TOKEN_TTL)
+
             return token
         attempt_num += 1
 
@@ -1128,6 +1215,80 @@ async def rotate_keys_with_redis(
         return kid
 
 
+async def rotate_refresh_token(
+    *,
+    redis_client: aioredis.Redis,
+    refresh_token: str,
+    revoke_access: bool,
+) -> tuple[str, str, int, int]:
+    """Exchange a still‑valid refresh token for a fresh access + refresh token pair.
+
+    Implements refresh‑token rotation---old refresh token is deleted immediately.
+
+    Parameters
+    ----------
+    redis_client
+        The Redis client used to fetch and store the refresh token.
+    refresh_token
+        The refresh token to verify and exchange for new tokens. This is a long-lived
+        token used to obtain new access tokens without requiring the user to
+        re-authenticate.
+    revoke_access
+        If True, all outstanding access tokens for the subject of the refresh token
+        will be revoked (deleted). This is useful for security purposes, such as when
+        a user logs out or changes their password.
+
+    Returns
+    -------
+    tuple[str, str, int, int]
+        A tuple containing the new access token, the new refresh token, the TTL of the
+        access token, and the TTL of the refresh token. The access token is a
+        short-lived token used to access protected resources, while the refresh token
+        is a long-lived token used to obtain new access tokens.
+    """
+
+    payload = await verify_refresh_token(
+        redis_client=redis_client, refresh_token=refresh_token
+    )
+
+    # Delete the old refresh token (one‑time use).
+    token_hash = hashlib.sha256(
+        refresh_token.encode(), usedforsecurity=True
+    ).hexdigest()
+    await redis_client.delete(REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(hash=token_hash))
+
+    # Optional: delete every outstanding access token belonging to this subject.
+    if revoke_access:
+        subj_set_key = REDIS_CACHE_PREFIX_SUB_JTIS.format(sub=payload["sub"])
+        jti_keys = (
+            await cast(
+                Awaitable[set[str]],
+                redis_client.smembers(subj_set_key),
+            )
+            or set()
+        )
+        if jti_keys:
+            await redis_client.delete(*jti_keys)
+        await redis_client.delete(subj_set_key)
+
+    # Mint brand‑new refresh tokens.
+    scopes = payload["scope"].split()
+    access_token = await get_jwt_token(
+        grant_type="refresh_token",
+        redis_client=redis_client,
+        scopes=scopes,
+        sub=str(payload["sub"]),
+    )
+    new_refresh_token, refresh_token_expires_in = await generate_refresh_token(
+        client_id=payload["client_id"],
+        redis_client=redis_client,
+        scopes=scopes,
+        sub=payload["sub"],
+    )
+
+    return access_token, new_refresh_token, AUTH_TOKEN_TTL, refresh_token_expires_in
+
+
 def sanitize_scopes(*, requested_scopes: list[str] | None) -> list[str]:
     """Sanitize the requested scopes against the allowed scopes.
 
@@ -1213,3 +1374,45 @@ def save_keypair(
     atomic_write(data=public_pem, target_fp=public_key_fp, mode="wb", perm=0o640)
 
     return private_key_fp, public_key_fp
+
+
+async def verify_refresh_token(
+    *, redis_client: aioredis.Redis, refresh_token: str
+) -> dict[str, Any]:
+    """Return stored payload or raise exception if token is unknown/expired.
+
+    Parameters
+    ----------
+    redis_client
+        An instance of `aioredis.Redis` used to fetch the refresh token.
+    refresh_token
+        The refresh token to verify. This is a long-lived token used to obtain new
+        access tokens without requiring the user to re-authenticate.
+
+    Returns
+    -------
+    dict[str, Any]
+        The payload associated with the refresh token, typically containing the client
+        ID, scopes, expiration time, and subject.
+
+    Raises
+    ------
+    HTTPException
+        If the refresh token is invalid or has expired. This exception will have a
+        status code of 401 (Unauthorized) and a detail message indicating the error.
+    """
+
+    token_hash = hashlib.sha256(
+        refresh_token.encode(), usedforsecurity=True
+    ).hexdigest()
+
+    raw = await redis_client.get(
+        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(hash=token_hash)
+    )
+
+    if not raw:
+        raise HTTPException(
+            detail="Invalid refresh token", status_code=status.HTTP_401_UNAUTHORIZED
+        )
+
+    return json.loads(raw)

@@ -6,23 +6,28 @@ refresh/consent flows), plus key discovery via JWKS.
 """
 
 # Standard Library
+import hashlib
+
 from typing import Any, Optional
 
 # Third Party Library
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from jose import JWTError, jwt
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
-from mcp_demo.auth.schemas import IntrospectionResponse
+from mcp_demo.auth.schemas import IntrospectionResponse, RefreshTokenRequestForm
 from mcp_demo.auth.utils import (
     ClientCredentialsRequestForm,
     _verify_caller,
+    generate_refresh_token,
     get_cached_jwks,
     get_jwt_token,
+    rotate_refresh_token,
     sanitize_scopes,
 )
 from mcp_demo.clients.models import Oauth2ClientDB
@@ -56,7 +61,7 @@ limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
         "this URI based on its `Cache-Control` headers."
     ),
     include_in_schema=False,
-    summary="JWKS Endpoint",
+    summary="JWKS endpoint",
 )
 async def get_jwks() -> JSONResponse:
     """Serve the public JWKS for verifying JWT signatures.
@@ -194,7 +199,7 @@ async def token_endpoint(
     asession: AsyncSession = Depends(get_async_session),
     credentials: HTTPBasicCredentials | None = Depends(basic_auth),
     form: ClientCredentialsRequestForm = Depends(),
-) -> TokenResponse:
+) -> JSONResponse | TokenResponse:
     """Issue a Bearer token via OAuth2 Client-Credentials or Password grant.
 
     Grant types supported:
@@ -221,9 +226,11 @@ async def token_endpoint(
 
     Returns
     -------
-    TokenResponse
-        A Bearer token response including `access_token`, `token_type`, and
-        `expires_in`.
+    JSONResponse | TokenResponse
+        A response containing the access token, its expiration time, and the token
+        type. If the grant type is "client_credentials", it returns a `TokenResponse`
+        with the access token and refresh token. If the grant type is "password", it
+        returns a `JSONResponse` with the access token set as an HTTP-only cookie.
 
     Raises
     ------
@@ -264,16 +271,25 @@ async def token_endpoint(
 
             await reset_failed_login(ip=ip, redis_client=redis_client, user=client_id)
 
+            requested_scopes = sanitize_scopes(requested_scopes=client_db.scopes)
             token = await get_jwt_token(
                 grant_type="client_credentials",
                 redis_client=redis_client,
-                scopes=sanitize_scopes(requested_scopes=client_db.scopes),
+                scopes=requested_scopes,
                 sub=client_db.client_id,
+            )
+            refresh_token, refresh_token_expires_in = await generate_refresh_token(
+                client_id=client_db.client_id,
+                redis_client=request.app.state.redis,
+                scopes=requested_scopes,
+                sub=str(client_db.client_id),
             )
 
             return TokenResponse(
                 access_token=token,
                 expires_in=Settings.AUTH_TOKEN_TTL,
+                refresh_token=refresh_token,
+                refresh_token_expires_in=refresh_token_expires_in,
                 token_type="Bearer",
             )
         case "password":
@@ -302,18 +318,26 @@ async def token_endpoint(
             user_scopes = await get_user_scopes_by_id(
                 asession=asession, user_id=user_db.user_id
             )
+            requested_scopes = sanitize_scopes(requested_scopes=list(user_scopes))
             token = await get_jwt_token(
                 grant_type="password",
                 passphrase=Settings.AUTH_RSA_PASSPHRASE.get_secret_value(),
                 redis_client=redis_client,
-                scopes=sanitize_scopes(requested_scopes=list(user_scopes)),
+                scopes=requested_scopes,
                 sub=str(user_db.user_id),
             )
-
+            refresh_token, refresh_token_expires_in = await generate_refresh_token(
+                client_id=None,
+                redis_client=request.app.state.redis,
+                scopes=requested_scopes,
+                sub=str(user_db.user_id),
+            )
             token_response = TokenResponse(
                 access_token=token,
                 expires_in=Settings.AUTH_TOKEN_TTL,
-                token_type="bearer",
+                refresh_token=refresh_token,
+                refresh_token_expires_in=refresh_token_expires_in,
+                token_type="Bearer",
             )
             response = JSONResponse(content=token_response.model_dump())
             secure = Settings.FASTAPI_ENV in ["dev", "prod"]  # Sent only over HTTPS
@@ -321,15 +345,107 @@ async def token_endpoint(
                 httponly=True,  # Not visible to JS
                 key="access_token",
                 max_age=Settings.AUTH_TOKEN_TTL,
-                samesite="none" if secure else "lax",
+                samesite="none" if secure else "strict",  # Cross-site for OAuth2
                 secure=secure,
                 value=token,
             )
+
+            return response
         case _:
             raise HTTPException(
                 detail=f"Unsupported grant type: {form.grant_type}.",
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
+
+
+@router.post(
+    "/token/refresh", response_model=TokenResponse, summary="Rotate refresh token"
+)
+@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+async def refresh_token_endpoint(
+    form: RefreshTokenRequestForm, request: Request
+) -> TokenResponse:
+    """Rotate a refresh token to issue a new access token.
+
+    This endpoint allows clients to exchange a valid refresh token for a new access
+    token and a new refresh token. The old refresh token is revoked in the process.
+
+    Parameters
+    ----------
+    form
+        The form data containing the refresh token to rotate and whether to revoke the
+        access token.
+    request
+        The FastAPI request object.
+
+    Returns
+    -------
+    TokenResponse
+        A response containing the new access token, its expiration time, the new
+        refresh token, and its expiration time.
+    """
+
+    (
+        access_token,
+        new_refresh_token,
+        access_token_expires_in,
+        refresh_token_expires_in,
+    ) = await rotate_refresh_token(
+        redis_client=request.app.state.redis,
+        refresh_token=form.refresh_token,
+        revoke_access=form.revoke_access,
+    )
+
+    return TokenResponse(
+        access_token=access_token,
+        expires_in=access_token_expires_in,
+        token_type="bearer",
+        refresh_token=new_refresh_token,
+        refresh_token_expires_in=refresh_token_expires_in,
+    )
+
+
+@router.post(
+    "/token/revoke",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Revoke a refresh or access token",
+)
+async def revoke_token(
+    request: Request,
+    token: str = Form(..., description="Access or refresh token to revoke"),
+) -> None:
+    """Revoke a refresh or access token.
+
+    This endpoint allows clients to revoke either an access token or a refresh token.
+    If the token is an access token, it will be identified by its JTI (JWT ID) claim.
+    If the token is a refresh token, it will be identified by its SHA-256 hash. The
+    token is removed from the Redis cache, effectively invalidating it.
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object, used to access the Redis client.
+    token
+        The JWT token to revoke, which can be either an access token or a refresh token.
+    """
+
+    redis_client = request.app.state.redis
+
+    # Try access‑token path first.
+    try:
+        claims = jwt.get_unverified_claims(token)
+        jti = claims.get("jti")
+        if jti:
+            await redis_client.delete(Settings.REDIS_CACHE_PREFIX_JTI.format(jti=jti))
+            return
+    except JWTError:
+        pass
+
+    # Else treat as refresh token.
+    token_hash = hashlib.sha256(token.encode(), usedforsecurity=True).hexdigest()
+    await redis_client.delete(
+        Settings.REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(hash=token_hash)
+    )
 
 
 async def check_introspection_call(

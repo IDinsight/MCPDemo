@@ -30,7 +30,9 @@ class TokenResponse(BaseModel):
     expires_in: int = Field(
         Settings.AUTH_TOKEN_TTL, description="Lifetime of the token in seconds"
     )
-    token_type: str = Field("bearer", description="Type of the token, always 'bearer'")
+    refresh_token: str
+    refresh_token_expires_in: int
+    token_type: str = Field("Bearer", description="Type of the token, always 'bearer'")
 
     model_config = ConfigDict(from_attributes=True)
 

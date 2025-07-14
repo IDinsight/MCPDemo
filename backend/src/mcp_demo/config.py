@@ -30,6 +30,7 @@ class BackendSettings(BaseSettings):
     )
     AUTH_RSA_PUBLIC_EXPONENT: int = Field(65537, ge=3, le=65537)
     AUTH_TOKEN_ISSUER: str = "https://tokens.local"
+    AUTH_TOKEN_REFRESH_TTL: int = 60 * 60 * 24 * 30  # 30 days
     AUTH_TOKEN_TTL: int = 900  # 15 minutes
 
     # Chat
@@ -96,6 +97,8 @@ class BackendSettings(BaseSettings):
     REDIS_CACHE_PREFIX_JWKS_CURRENT: str = "jwks:current"
     REDIS_CACHE_PREFIX_LOCK_USER: str = "lock:{user}:{ip}"
     REDIS_CACHE_PREFIX_LOGIN_FAIL: str = "login_fail:{user}:{ip}"
+    REDIS_CACHE_PREFIX_REFRESH_TOKEN: str = "auth:refresh:{hash}"
+    REDIS_CACHE_PREFIX_SUB_JTIS: str = "auth:sub_jtis:{sub}"
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
 
     # Sentry

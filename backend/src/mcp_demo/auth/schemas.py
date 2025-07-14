@@ -1,7 +1,7 @@
 """This module contains Pydantic models for auth."""
 
 # Third Party Library
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class IntrospectionResponse(BaseModel):
@@ -13,5 +13,14 @@ class IntrospectionResponse(BaseModel):
     scope: str | None = None
     sub: int | None = None  # `user_id` if password grant
     token_type: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RefreshTokenRequestForm(BaseModel):
+    """Pydantic model for refresh token request."""
+
+    refresh_token: str = Field(..., min_length=80)
+    revoke_access: bool = False  # Set to True to revoke all old access tokens
 
     model_config = ConfigDict(from_attributes=True)
