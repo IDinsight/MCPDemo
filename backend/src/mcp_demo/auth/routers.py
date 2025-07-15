@@ -8,7 +8,7 @@ from typing import Any, Optional
 # Third Party Library
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.security import HTTPBasic
 from jose import JWTError, jwt
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -200,18 +200,81 @@ async def introspect_token(
 async def token_endpoint(
     request: Request,
     asession: AsyncSession = Depends(get_async_session),
-    credentials: HTTPBasicCredentials | None = Depends(basic_auth),
     form: ClientCredentialsRequestForm = Depends(),
 ) -> JSONResponse | TokenResponse:
-    """Issue a Bearer token via OAuth2 Client-Credentials or Password grant.
+    """Issue a Bearer token via OAuth2 Client-Credentials **or** Password grant. Upon
+    successful authentication (whether machine or human) a short‑lived RS256 JWT is
+    issued in addition to a refresh token.
 
-    Grant types supported:
+    The process is as follows:
 
-    1. client_credentials
-    2. password
+    For the "client_credentials" grant type:
 
-    Upon successful authentication—whether service or human—a short‑lived RS256 JWT is
-    issued.
+    1. Check if the client is locked out due to too many failed login attempts.
+    2. Verify the client credentials against the database. If the credentials are
+        invalid, record the failed login attempt.
+    3. If the client is valid, reset the failed login attempts.
+    4. Retrieve the client's scopes from the database and sanitize the scopes to ensure
+        they are valid.
+    5. Get a JWT token using the client's scopes.
+    6. Generate a refresh token for the client, which can be used to obtain new access
+        tokens without re-authenticating.
+    7. Create a `TokenResponse` containing the access token, its expiration time,
+        the refresh token, and its expiration time.
+
+    For the "password" grant type:
+
+    1. Check if the user is locked out due to too many failed login attempts.
+    2. Verify the user credentials against the database. If the credentials are
+        invalid, record the failed login attempt.
+    3. If the user is valid, reset the failed login attempts.
+    4. Retrieve the user's scopes from the database and sanitize the scopes to ensure
+        they are valid.
+    5. Get a JWT token using the user's scopes and the passphrase from settings.
+    6. Generate a refresh token for the user, which can be used to obtain new access
+        tokens without re-authenticating.
+    7. Create a `TokenResponse` containing the access token, its expiration time,
+        the refresh token, and its expiration time.
+    8. Set the access token as an HTTP-only cookie in the response, which is not
+        accessible via JavaScript, enhancing security against XSS attacks.
+
+    Note on HTTP-only cookie
+    ------------------------
+
+    In the password grant flow, the end user is a human who is authenticating directly
+    with a username and password. Their access token is usually returned in a
+    browser-based client (e.g., a web app) and web apps may want to store the access
+    token securely on the client so that it can be sent automatically with requests. In
+    step 8 of the password grant flow, we set the access token as an HTTP-only cookie
+    so that we can prevent JS access to the token (mitigates XSS attacks by preventing
+    client-side JS from accessing document.cookie to read the token), allow the browser
+    to automatically send the token with each request (cookie-based session), keep the
+    UX clean (no localStorage or Authorization header management in JS), and allow
+    pairing with CSRF tokens for extra security. In other words, the HTTP-only cookie
+    acts like a traditional session token for the user's browser. When the browser
+    receives the response with Set-Cookie, it stores the access token in a cookie named
+    `access_token`. This cookie is then automatically sent by the browser on all future
+    requests to the server (as long as the path/domain match), so users don’t need to
+    manually include the token in request headers each time. Thus, in practice, after a
+    user log ins (password or refresh), the API responds with a JSON payload and sets a
+    secure, HTTP-only cookie containing the access token. Future API calls (e.g. to a
+    protected endpoint) don’t need an "Authorization: Bearer ..." header-the browser
+    will send the cookie automatically.
+
+    In the client credentials grant flow, there is no user---it's machine-to-machine.
+    A machine (or backend service) sends its client ID and secret to get an access
+    token and that token is meant to be stored in memory by that machine, not a
+    browser. Machines don't use cookies and HTTP-only cookies are not visible to the
+    script calling the token endpoint---in other words, if you were to include the
+    HTTP-only cookie in the response, you would be leaking sensitive credentials into
+    an HTTP response that a machine doesn't even need/use.
+
+    While these flags mitigate XSS risks, they don’t block CSRF (Cross-Site Request
+    Forgery), since the cookie is still sent on cross-site POSTs. To fully protect
+    endpoints, we'd also need either:
+        1. A CSRF token (e.g., double-submit),
+        2. Or use SameSite=Lax/Strict for cookies if it fits the flows,
+        3. Or rely solely on Authorization header tokens instead of cookies.
 
     Parameters
     ----------
@@ -219,9 +282,6 @@ async def token_endpoint(
         The FastAPI request object.
     asession
         The SQLAlchemy async session to use for all database connections.
-    credentials
-        Optional HTTP Basic credentials for client authentication. If provided, the
-        caller must be a registered client with a valid secret.
     form
         Form data covering both client_credentials and password grants:
             - `grant_type`: one of "client_credentials" or "password"
@@ -238,10 +298,9 @@ async def token_endpoint(
     Raises
     ------
     HTTPException
-        If the client ID does not exist, is inactive, or the client secret does not
-            match the stored hash.
-        If the user is locked out due to too many failed login attempts.
-        If the user credentials are invalid or the user does not exist.
+        If the user/client is locked out due to too many failed login attempts.
+        If the user/client credentials are invalid or the user/client does not exist.
+        If the grant type is unsupported.
     """
 
     assert request.client is not None, f"Request client is None: {request}"
@@ -250,37 +309,48 @@ async def token_endpoint(
 
     match form.grant_type:
         case "client_credentials":
-            client_id = form.client_id if credentials is None else credentials.username
-            client_secret = (
-                form.client_secret if credentials is None else credentials.password
-            )
-            if not (client_id and client_secret):
+            client_id, client_secret = form.client_id, form.client_secret
+
+            # 1.
+            if await is_locked_out(
+                client_id=client_id, ip=ip, redis_client=redis_client
+            ):
                 raise HTTPException(
-                    detail="Client ID/Client Secret required.",
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Too many failed login attempts.",
+                    status_code=status.HTTP_401_UNAUTHORIZED,
                 )
 
+            # 2.
             client_db = await verify_client(
                 asession=asession, client_id=client_id, client_secret=client_secret
             )
             if client_db is None:
                 await record_failed_login(
-                    ip=ip, redis_client=redis_client, user=client_id
+                    client_id=client_id, ip=ip, redis_client=redis_client
                 )
                 raise HTTPException(
                     detail="Invalid client credentials",
                     status_code=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            await reset_failed_login(ip=ip, redis_client=redis_client, user=client_id)
+            # 3.
+            await reset_failed_login(
+                client_id=client_id, ip=ip, redis_client=redis_client
+            )
 
-            requested_scopes = sanitize_scopes(requested_scopes=client_db.scopes)
+            # 4.
+            client_scopes = client_db.scopes
+            requested_scopes = sanitize_scopes(requested_scopes=client_scopes)
+
+            # 5.
             token = await get_jwt_token(
-                grant_type="client_credentials",
+                grant_type=form.grant_type,
                 redis_client=redis_client,
                 scopes=requested_scopes,
                 sub=client_db.client_id,
             )
+
+            # 6.
             refresh_token, refresh_token_expires_in = await generate_refresh_token(
                 client_id=client_db.client_id,
                 redis_client=request.app.state.redis,
@@ -288,6 +358,7 @@ async def token_endpoint(
                 sub=str(client_db.client_id),
             )
 
+            # 7.
             return TokenResponse(
                 access_token=token,
                 expires_in=AUTH_TOKEN_TTL,
@@ -296,45 +367,57 @@ async def token_endpoint(
                 token_type="Bearer",
             )
         case "password":
-            username = form.username
+            username, password = form.username, form.password
 
-            if await is_locked_out(ip=ip, redis_client=redis_client, user=username):
+            # 1.
+            if await is_locked_out(ip=ip, redis_client=redis_client, username=username):
                 raise HTTPException(
-                    detail="Too many failed login attempts. Try again later.",
+                    detail="Too many failed login attempts.",
                     status_code=status.HTTP_401_UNAUTHORIZED,
                 )
 
+            # 2.
             user_db = await verify_user(
-                asession=asession, password=form.password, username=username
+                asession=asession, password=password, username=username
             )
             if user_db is None:
                 await record_failed_login(
-                    ip=ip, redis_client=redis_client, user=username
+                    ip=ip, redis_client=redis_client, username=username
                 )
                 raise HTTPException(
-                    detail="Too many failed login attempts. Try again later.",
+                    detail="Invalid user credentials.",
                     status_code=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            await reset_failed_login(ip=ip, redis_client=redis_client, user=username)
+            # 3.
+            await reset_failed_login(
+                ip=ip, redis_client=redis_client, username=username
+            )
 
+            # 4.
             user_scopes = await get_user_scopes_by_id(
                 asession=asession, user_id=user_db.user_id
             )
             requested_scopes = sanitize_scopes(requested_scopes=list(user_scopes))
+
+            # 5.
             token = await get_jwt_token(
-                grant_type="password",
+                grant_type=form.grant_type,
                 passphrase=AUTH_RSA_PASSPHRASE.get_secret_value(),
                 redis_client=redis_client,
                 scopes=requested_scopes,
                 sub=str(user_db.user_id),
             )
+
+            # 6.
             refresh_token, refresh_token_expires_in = await generate_refresh_token(
                 client_id=None,
                 redis_client=request.app.state.redis,
                 scopes=requested_scopes,
                 sub=str(user_db.user_id),
             )
+
+            # 7.
             token_response = TokenResponse(
                 access_token=token,
                 expires_in=AUTH_TOKEN_TTL,
@@ -342,6 +425,8 @@ async def token_endpoint(
                 refresh_token_expires_in=refresh_token_expires_in,
                 token_type="Bearer",
             )
+
+            # 8.
             response = JSONResponse(content=token_response.model_dump())
             secure = FASTAPI_ENV in ["dev", "prod"]  # Sent only over HTTPS
             response.set_cookie(
@@ -349,7 +434,7 @@ async def token_endpoint(
                 key="access_token",
                 max_age=AUTH_TOKEN_TTL,
                 samesite="none" if secure else "strict",  # Cross-site for OAuth2
-                secure=secure,
+                secure=secure,  # Ensure cookie is only sent over HTTPS
                 value=token,
             )
 
@@ -451,7 +536,9 @@ async def revoke_token(
 
     # Otherwise treat as refresh token.
     token_hash = hashlib.sha256(token.encode(), usedforsecurity=True).hexdigest()
-    await redis_client.delete(REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(hash=token_hash))
+    await redis_client.delete(
+        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(token_hash=token_hash)
+    )
 
     return RevokeTokenResponse(revoked_token=token, type="refresh_token")
 
