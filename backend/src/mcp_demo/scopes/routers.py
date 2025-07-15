@@ -16,11 +16,14 @@ from mcp_demo.utils.database import get_async_session
 TAG_METADATA = {"description": "Manages scopes", "name": "Scope"}
 router = APIRouter(prefix="/scope", tags=[TAG_METADATA["name"]])
 
-limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
+RATE_LIMIT_LOGIN_RATE = Settings.RATE_LIMIT_LOGIN_RATE
+REDIS_URL = Settings.REDIS_URL
+
+limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)
 
 
 @router.post("/", response_model=ScopeResponse)
-@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def create_global_scope(
     request: Request,  # pylint: disable=W0613
     scope_create: ScopeCreate,
@@ -58,7 +61,7 @@ async def create_global_scope(
     status_code=status.HTTP_200_OK,
     summary="Delete a global scope",
 )
-@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def delete_global_scope(
     request: Request,  # pylint: disable=W0613
     scope_name: str,

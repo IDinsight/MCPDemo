@@ -6,6 +6,8 @@ from redis import asyncio as aioredis
 # Package Library
 from mcp_demo.config import Settings
 
+RATE_LIMIT_LOGIN_LOCK_SECONDS = Settings.RATE_LIMIT_LOGIN_LOCK_SECONDS
+RATE_LIMIT_LOGIN_LOCK_THRESHOLD = Settings.RATE_LIMIT_LOGIN_LOCK_THRESHOLD
 REDIS_CACHE_PREFIX_LOCK_USER = Settings.REDIS_CACHE_PREFIX_LOCK_USER
 REDIS_CACHE_PREFIX_LOGIN_FAIL = Settings.REDIS_CACHE_PREFIX_LOGIN_FAIL
 
@@ -62,14 +64,14 @@ async def record_failed_login(
     k = REDIS_CACHE_PREFIX_LOGIN_FAIL.format(ip=ip, user=user)
     async with redis_client.pipeline() as pipe:
         pipe.incr(k)
-        pipe.expire(k, Settings.RATE_LIMIT_LOGIN_LOCK_SECONDS)
+        pipe.expire(k, RATE_LIMIT_LOGIN_LOCK_SECONDS)
         incr_count, _ = await pipe.execute()
 
-    if incr_count >= Settings.RATE_LIMIT_LOGIN_LOCK_THRESHOLD:
+    if incr_count >= RATE_LIMIT_LOGIN_LOCK_THRESHOLD:
         await redis_client.set(
             REDIS_CACHE_PREFIX_LOCK_USER.format(ip=ip, user=user),
             1,
-            ex=Settings.RATE_LIMIT_LOGIN_LOCK_SECONDS,
+            ex=RATE_LIMIT_LOGIN_LOCK_SECONDS,
         )
 
 

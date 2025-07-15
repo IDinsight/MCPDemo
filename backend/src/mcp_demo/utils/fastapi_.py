@@ -33,7 +33,7 @@ REDIS_URL = Settings.REDIS_URL
 SENTRY_DSN = Settings.SENTRY_DSN
 SENTRY_TRACES_SAMPLE_RATE = Settings.SENTRY_TRACES_SAMPLE_RATE
 
-limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
+limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)
 
 
 def create_fastapi_app() -> FastAPI:

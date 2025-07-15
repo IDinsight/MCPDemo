@@ -10,6 +10,8 @@ from mcp_demo.config import Settings
 from mcp_demo.scopes.models import ScopeDB, user_scope_table
 from mcp_demo.scopes.schemas import Scope, ScopeCreate
 
+AUTH_ALLOWED_SCOPES = Settings.AUTH_ALLOWED_SCOPES
+
 
 async def add_scope_to_db(*, asession: AsyncSession, scope: ScopeCreate) -> ScopeDB:
     """Add a new (global) scope to the database.
@@ -29,7 +31,7 @@ async def add_scope_to_db(*, asession: AsyncSession, scope: ScopeCreate) -> Scop
 
     name = scope.name.strip()
 
-    if name not in Settings.AUTH_ALLOWED_SCOPES:
+    if name not in AUTH_ALLOWED_SCOPES:
         raise HTTPException(
             detail=f"Invalid scope name: '{name}'.",
             status_code=status.HTTP_400_BAD_REQUEST,
