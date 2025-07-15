@@ -89,8 +89,10 @@ class BackendSettings(BaseSettings):
     REDIS_CACHE_PREFIX_CHAT: str = os.getenv("REDIS_CACHE_PREFIX_CHAT", "chat_sessions")
     REDIS_CACHE_PREFIX_JTI: str = "jti:{jti}"
     REDIS_CACHE_PREFIX_JWKS_CURRENT: str = "jwks:current"
-    REDIS_CACHE_PREFIX_LOCK_USER: str = "lock:{user}:{ip}"
-    REDIS_CACHE_PREFIX_LOGIN_FAIL: str = "login_fail:{user}:{ip}"
+    REDIS_CACHE_PREFIX_LOCK_CLIENT: str = "lock:{client_id:{ip}"
+    REDIS_CACHE_PREFIX_LOCK_USER: str = "lock:{username}:{ip}"
+    REDIS_CACHE_PREFIX_LOGIN_FAIL_CLIENT: str = "login_fail:{client_id}:{ip}"
+    REDIS_CACHE_PREFIX_LOGIN_FAIL_USER: str = "login_fail:{username}:{ip}"
     REDIS_CACHE_PREFIX_REFRESH_TOKEN: str = "auth:refresh:{hash}"
     REDIS_CACHE_PREFIX_SUB_JTIS: str = "auth:sub_jtis:{sub}"
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
