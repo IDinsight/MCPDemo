@@ -252,6 +252,11 @@ async def _store_refresh_token(
 ) -> None:
     """Hash and persist a one‑time refresh token.
 
+    NB: We want to hash based on the token's plain text value, not the user/client ID,
+    This enables multiple concurrent sessions for the user/client so that they may log
+    in from multiple devices or browsers without invalidating each other's refresh
+    tokens.
+
     Parameters
     ----------
     payload
@@ -265,7 +270,8 @@ async def _store_refresh_token(
     """
 
     token_hash = hashlib.sha256(token_plain.encode(), usedforsecurity=True).hexdigest()
-    key = REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(hash=token_hash)
+    key = REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(token_hash=token_hash)
+
     await redis_client.set(
         ex=AUTH_TOKEN_REFRESH_TTL,
         name=key,
@@ -400,7 +406,9 @@ async def generate_refresh_token(
     scopes: list[str],
     sub: str,
 ) -> tuple[str, int]:
-    """Create a long‑lived, one‑time refresh token and persist it hashed.
+    """Create a long‑lived, one‑time refresh token and persist its hash. The refresh
+    token is a long-lived token that can be used to obtain new access tokens without
+    requiring the user/client to re-authenticate.
 
     Parameters
     ----------
@@ -420,16 +428,15 @@ async def generate_refresh_token(
     Returns
     -------
     tuple[str, int]
-        A tuple containing the generated refresh token as a string and its TTL (time to
-        live) in seconds. The refresh token is a long-lived token that can be used to
-        obtain new access tokens without requiring the user to re-authenticate.
+        A tuple containing the generated refresh token as a string and its TTL in
+        seconds.
     """
 
     refresh_token = secrets.token_urlsafe(64)
     payload = {
         "client_id": client_id,
-        "scope": " ".join(scopes),
         "exp": int(time.time()) + AUTH_TOKEN_REFRESH_TTL,
+        "scope": " ".join(scopes),
         "sub": sub,
     }
 
@@ -1259,7 +1266,9 @@ async def rotate_refresh_token(
     token_hash = hashlib.sha256(
         refresh_token.encode(), usedforsecurity=True
     ).hexdigest()
-    await redis_client.delete(REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(hash=token_hash))
+    await redis_client.delete(
+        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(token_hash=token_hash)
+    )
 
     # Optional: delete every outstanding access token belonging to this subject.
     if revoke_access:
@@ -1423,7 +1432,7 @@ async def verify_refresh_token(
     ).hexdigest()
 
     raw = await redis_client.get(
-        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(hash=token_hash)
+        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(token_hash=token_hash)
     )
 
     if not raw:
