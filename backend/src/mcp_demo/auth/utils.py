@@ -319,10 +319,12 @@ async def _verify_caller(
         headers={"WWW-Authenticate": "Bearer"},
         status_code=status.HTTP_401_UNAUTHORIZED,
     )
+
+    if not token:
+        raise credentials_exception
+
     options = options or {}
-    if options.get("verify_aud") is False:
-        raise ValueError("Disabling aud verification is not allowed")
-    options.update({"require_exp": True, "verify_signature": True})
+    options.update({"require_exp": True, "verify_aud": True, "verify_signature": True})
     required_scopes = required_scopes or set()
     token = sanitize_token(token=token)
 
@@ -366,7 +368,7 @@ async def _verify_caller(
     token_scopes = {s.strip().lower() for s in payload.get("scope", "").split()}
     if not required_scopes.issubset(token_scopes):
         raise HTTPException(
-            detail="Not enough permissions", status_code=status.HTTP_403_FORBIDDEN
+            detail="Insufficient permissions", status_code=status.HTTP_403_FORBIDDEN
         )
 
     return payload

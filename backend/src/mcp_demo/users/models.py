@@ -5,7 +5,8 @@
 from datetime import datetime, timezone
 
 # Third Party Library
-from sqlalchemy import ARRAY, Boolean, CheckConstraint, DateTime, Integer, String
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Integer, String
+from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -51,7 +52,9 @@ class UserDB(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     password_hash: Mapped[str] = mapped_column(String(), nullable=False)
-    recovery_codes_hash: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=True)
+    recovery_codes_hash: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSON), default=list, nullable=False
+    )
     scopes: Mapped[list[ScopeDB]] = relationship(
         back_populates="users", cascade="all,delete", secondary=user_scope_table
     )

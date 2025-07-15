@@ -100,6 +100,12 @@ clean-docker: ## Remove every container, image, volume, network, build cache & h
 	done 2>/dev/null || true
 	@echo "Docker Desktop is now squeaky-clean ✔"
 
+clean-docker-container = \
+	@echo "$(RED)Stopping and removing container: $(1)...$(RESET)"; \
+	docker stop $(1) || true; \
+	docker rm $(1) || true; \
+	docker system prune -f
+
 # Dev
 up-dev: ## Set up the development environment by starting all containers using Docker compose
 	@echo "$(RED)Spinning down any existing dev Docker containers...$(RESET)"

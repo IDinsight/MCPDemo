@@ -87,7 +87,7 @@ async def add_new_user(
     2. Check if the username already exists in the database.
     3. Generate recovery codes for the new user.
     4. Save the new user to the database with the generated recovery codes.
-    5. Add the 'read' scope to the new user.
+    5. Add the 'read' scope to the scope database and assign it to the new user.
 
     Parameters
     ----------
@@ -298,7 +298,7 @@ async def register_first_user(
     1. Check if any users already exist in the database. If so, raise an error.
     2. Generate recovery codes for the first user.
     3. Save the first user to the database with the generated recovery codes.
-    4. Add the 'admin' scope to the first user.
+    4. Add the 'admin' scope to the scope database and assign it to the first user.
 
     Parameters
     ----------
@@ -400,10 +400,13 @@ async def get_user(
             status_code=status.HTTP_404_NOT_FOUND,
         ) from exc
 
+    target_user_scopes = await get_user_scopes_by_id(
+        asession=asession, user_id=target_user_db.user_id
+    )
     return UserRetrieve(
         created_datetime_utc=target_user_db.created_datetime_utc,
         is_active=target_user_db.is_active,
-        scopes=[s.name for s in target_user_db.scopes],
+        scopes=list(target_user_scopes),
         updated_datetime_utc=target_user_db.updated_datetime_utc,
         user_id=target_user_db.user_id,
         username=target_user_db.username,
@@ -457,8 +460,12 @@ async def delete_user(
     """
 
     # 1.
+    calling_user_scopes = await get_user_scopes_by_id(
+        asession=asession, user_id=calling_user_db.user_id
+    )
+
     if calling_user_db.user_id != user_id and "admin" not in (
-        calling_user_db.scopes or []
+        calling_user_scopes or []
     ):
         raise HTTPException(
             detail=f"User ID not found: {user_id}.",
@@ -546,10 +553,13 @@ async def reset_password(
     updated_user_db = await reset_user_password(
         asession=asession, user=user, user_db=user_to_update
     )
-
+    updated_user_scopes = await get_user_scopes_by_id(
+        asession=asession, user_id=updated_user_db.user_id
+    )
     return UserRetrieve(
         created_datetime_utc=updated_user_db.created_datetime_utc,
         is_active=updated_user_db.is_active,
+        scopes=list(updated_user_scopes),
         updated_datetime_utc=updated_user_db.updated_datetime_utc,
         user_id=updated_user_db.user_id,
         username=updated_user_db.username,
