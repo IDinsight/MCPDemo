@@ -1,9 +1,4 @@
-"""This module contains FastAPI routers for authentication endpoints.
-
-This setup is optimized for machine-to-machine (service-to-service) use cases,
-providing a lightweight OAuth2 “password grant” token-issuing endpoint (bypassing
-refresh/consent flows), plus key discovery via JWKS.
-"""
+"""This module contains FastAPI routers for authentication endpoints."""
 
 # Standard Library
 import hashlib
@@ -50,10 +45,18 @@ TAG_METADATA = {
     "description": "Endpoints for issuing and discovering JWTs",
     "name": "Authentication",
 }
+basic_auth = HTTPBasic(auto_error=False)  # RFC 7662 requires auth but we handle error
 router = APIRouter(prefix="/auth", tags=[TAG_METADATA["name"]])
 
-basic_auth = HTTPBasic(auto_error=False)  # RFC 7662 requires auth but we handle error
-limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
+AUTH_RSA_PASSPHRASE = Settings.AUTH_RSA_PASSPHRASE
+AUTH_TOKEN_TTL = Settings.AUTH_TOKEN_TTL
+FASTAPI_ENV = Settings.FASTAPI_ENV
+RATE_LIMIT_LOGIN_RATE = Settings.RATE_LIMIT_LOGIN_RATE
+REDIS_CACHE_PREFIX_JTI = Settings.REDIS_CACHE_PREFIX_JTI
+REDIS_CACHE_PREFIX_REFRESH_TOKEN = Settings.REDIS_CACHE_PREFIX_REFRESH_TOKEN
+REDIS_URL = Settings.REDIS_URL
+
+limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)
 
 
 @router.get(
@@ -85,7 +88,7 @@ async def get_jwks() -> JSONResponse:
 
 
 @router.post("/introspect", response_model=IntrospectionResponse)
-@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def introspect_token(
     request: Request,
     asession: AsyncSession = Depends(get_async_session),
@@ -196,7 +199,7 @@ async def introspect_token(
     response_model=TokenResponse,
     summary="Issue JWT via Client-Credentials or Password grant",
 )
-@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def token_endpoint(
     request: Request,
     asession: AsyncSession = Depends(get_async_session),
@@ -290,7 +293,7 @@ async def token_endpoint(
 
             return TokenResponse(
                 access_token=token,
-                expires_in=Settings.AUTH_TOKEN_TTL,
+                expires_in=AUTH_TOKEN_TTL,
                 refresh_token=refresh_token,
                 refresh_token_expires_in=refresh_token_expires_in,
                 token_type="Bearer",
@@ -324,7 +327,7 @@ async def token_endpoint(
             requested_scopes = sanitize_scopes(requested_scopes=list(user_scopes))
             token = await get_jwt_token(
                 grant_type="password",
-                passphrase=Settings.AUTH_RSA_PASSPHRASE.get_secret_value(),
+                passphrase=AUTH_RSA_PASSPHRASE.get_secret_value(),
                 redis_client=redis_client,
                 scopes=requested_scopes,
                 sub=str(user_db.user_id),
@@ -337,17 +340,17 @@ async def token_endpoint(
             )
             token_response = TokenResponse(
                 access_token=token,
-                expires_in=Settings.AUTH_TOKEN_TTL,
+                expires_in=AUTH_TOKEN_TTL,
                 refresh_token=refresh_token,
                 refresh_token_expires_in=refresh_token_expires_in,
                 token_type="Bearer",
             )
             response = JSONResponse(content=token_response.model_dump())
-            secure = Settings.FASTAPI_ENV in ["dev", "prod"]  # Sent only over HTTPS
+            secure = FASTAPI_ENV in ["dev", "prod"]  # Sent only over HTTPS
             response.set_cookie(
                 httponly=True,  # Not visible to JS
                 key="access_token",
-                max_age=Settings.AUTH_TOKEN_TTL,
+                max_age=AUTH_TOKEN_TTL,
                 samesite="none" if secure else "strict",  # Cross-site for OAuth2
                 secure=secure,
                 value=token,
@@ -364,7 +367,7 @@ async def token_endpoint(
 @router.post(
     "/token/refresh", response_model=TokenResponse, summary="Rotate refresh token"
 )
-@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def refresh_token_endpoint(
     form: RefreshTokenRequestForm, request: Request
 ) -> TokenResponse:
@@ -439,16 +442,14 @@ async def revoke_token(
         claims = jwt.get_unverified_claims(token)
         jti = claims.get("jti")
         if jti:
-            await redis_client.delete(Settings.REDIS_CACHE_PREFIX_JTI.format(jti=jti))
+            await redis_client.delete(REDIS_CACHE_PREFIX_JTI.format(jti=jti))
             return
     except JWTError:
         pass
 
     # Else treat as refresh token.
     token_hash = hashlib.sha256(token.encode(), usedforsecurity=True).hexdigest()
-    await redis_client.delete(
-        Settings.REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(hash=token_hash)
-    )
+    await redis_client.delete(REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(hash=token_hash))
 
 
 async def check_introspection_call(

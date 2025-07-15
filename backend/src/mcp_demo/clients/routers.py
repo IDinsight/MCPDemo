@@ -35,7 +35,10 @@ from mcp_demo.utils.database import get_async_session
 TAG_METADATA = {"description": "Manages clients", "name": "Client"}
 router = APIRouter(prefix="/client", tags=[TAG_METADATA["name"]])
 
-limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
+RATE_LIMIT_LOGIN_RATE = Settings.RATE_LIMIT_LOGIN_RATE
+REDIS_URL = Settings.REDIS_URL
+
+limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)
 
 
 @router.get("/admin-panel")
@@ -68,7 +71,7 @@ async def admin_panel(
     status_code=status.HTTP_201_CREATED,
     summary="Create a machine-to-machine service client",
 )
-@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def register(
     oauth2_client: OAuth2ClientCreate,
     request: Request,  # pylint: disable=W0613
@@ -125,7 +128,7 @@ async def register(
 
 
 @router.delete("/{client_id}", response_model=OAuth2ClientDeleteResponse)
-@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def delete_client(
     calling_client_db: Annotated[Oauth2ClientDB, Depends(get_current_client)],
     client_id: str,
