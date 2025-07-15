@@ -29,6 +29,7 @@ class ScopeDeleteResponse(Scope):
     """Pydantic model for scope deletion response."""
 
     removed: bool
+    user_id: int
 
 
 class ScopeResponse(ScopeAssign):

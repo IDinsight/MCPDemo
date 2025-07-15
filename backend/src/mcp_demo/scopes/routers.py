@@ -28,7 +28,7 @@ async def create_global_scope(
     request: Request,  # pylint: disable=W0613
     scope_create: ScopeCreate,
     asession: AsyncSession = Depends(get_async_session),
-    claims: dict = require_scopes(required_scopes={"admin"}),  # pylint: disable=W0613
+    claims: dict = require_scopes(required_scopes={"admin"}),
 ) -> ScopeResponse:
     """Add a new global OAuth2 scope.
 
@@ -50,8 +50,7 @@ async def create_global_scope(
     """
 
     scope_db = await add_scope_to_db(asession=asession, scope=scope_create)
-
-    return ScopeResponse(scopes=[scope_db.name])
+    return ScopeResponse(scopes=[scope_db.name], user_id=claims["sub"])
 
 
 @router.delete(
@@ -66,7 +65,7 @@ async def delete_global_scope(
     request: Request,  # pylint: disable=W0613
     scope_name: str,
     asession: AsyncSession = Depends(get_async_session),
-    claims: dict = require_scopes(required_scopes={"admin"}),  # pylint: disable=W0613
+    claims: dict = require_scopes(required_scopes={"admin"}),
     force: bool = Query(False, description="Force deletion even if linked to users."),
 ) -> ScopeDeleteResponse:
     """Remove a global OAuth2 scope (admin-only).
@@ -98,4 +97,4 @@ async def delete_global_scope(
     if not existed:
         raise HTTPException(status_code=status.HTTP_204_NO_CONTENT)
 
-    return ScopeDeleteResponse(name=scope_name, removed=deleted)
+    return ScopeDeleteResponse(name=scope_name, removed=deleted, user_id=claims["sub"])
