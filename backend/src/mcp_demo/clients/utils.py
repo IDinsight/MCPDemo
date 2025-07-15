@@ -263,7 +263,7 @@ async def save_client_to_db(
             error_msg=f"OAuth2 client ID already exists: {existing_client.client_id}"
         )
 
-    if client.scopes not in AUTH_ALLOWED_SCOPES:
+    if not all(s in AUTH_ALLOWED_SCOPES for s in client.scopes):
         raise Oauth2ClientDBInvalidScopesError(
             error_msg=f"Invalid scopes: {client.scopes}."
         )
