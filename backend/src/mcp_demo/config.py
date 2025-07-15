@@ -115,7 +115,9 @@ class BackendSettings(BaseSettings):
         "top_p": 0.9,
     }
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="allow"
+    )
 
     @classmethod
     def create_sync_postgres_db_url(cls) -> str:
