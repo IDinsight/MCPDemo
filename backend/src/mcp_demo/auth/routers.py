@@ -85,8 +85,6 @@ async def get_jwks() -> JSONResponse:
     """
 
     jwks = await get_cached_jwks()
-    print(f"{jwks = }")
-    input()
     return JSONResponse(jwks)
 
 

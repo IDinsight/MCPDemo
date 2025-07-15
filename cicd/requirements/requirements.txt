@@ -503,9 +503,9 @@ fastapi-sso==0.16.0 \
     --hash=sha256:3a66a942474ef9756d3a9d8b945d55bd9faf99781facdb9b87a40b73d6d6b0c3 \
     --hash=sha256:f3941f986347566b7d3747c710cf474a907f581bfb6697ff3bb3e44eb76b438c
     # via litellm
-fastmcp==2.10.4 \
-    --hash=sha256:49c6de71fa2f7132af4592f278e003e83b86b15a187a26cf2502bf3dce8155ba \
-    --hash=sha256:a998882018806198fdcde57b06816a82028a23de24d647bc10e72c0866431e0f
+fastmcp==2.10.5 \
+    --hash=sha256:ab218f6a66b61f6f83c413d37aa18f5c30882c44c8925f39ecd02dd855826540 \
+    --hash=sha256:f829e0b11c4d136db1d81e20e8acb19cf5108f64059482d1853f3c940326cf04
     # via mcp-demo (pyproject.toml)
 filelock==3.18.0 \
     --hash=sha256:adbc88eabb99d2fec8c9c1b229b171f18afa655400173ddc653d5d01501fb9f2 \
