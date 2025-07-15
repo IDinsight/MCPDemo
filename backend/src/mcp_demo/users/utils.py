@@ -22,6 +22,8 @@ from mcp_demo.users.schemas import User, UserCreateWithPassword, UserResetPasswo
 from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.general import generate_hash, generate_random_string, verify_hash
 
+AUTH_ALLOWED_SCOPES = Settings.AUTH_ALLOWED_SCOPES
+
 
 class UserAlreadyExistsError(Exception):
     """Custom exception raised when a user already exists in the database."""
@@ -91,7 +93,7 @@ async def add_scopes_to_user(
     """
 
     # 1.
-    allowed = set(Settings.AUTH_ALLOWED_SCOPES)
+    allowed = set(AUTH_ALLOWED_SCOPES)
     unknown_scopes = [s for s in scopes if s not in allowed]
     if unknown_scopes:
         raise HTTPException(
@@ -542,7 +544,7 @@ async def validate_user_scopes(*, scopes: list[str]) -> bool:
         A list of scope names to validate.
     """
 
-    return set(scopes).issubset(Settings.AUTH_ALLOWED_SCOPES)
+    return set(scopes).issubset(AUTH_ALLOWED_SCOPES)
 
 
 async def verify_recovery_code(

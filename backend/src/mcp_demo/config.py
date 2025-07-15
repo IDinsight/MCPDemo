@@ -36,15 +36,6 @@ class BackendSettings(BaseSettings):
     # Chat
     CHAT_ENV: str = "dev"
 
-    # LiteLLM
-    LITELLM_API_KEY: str = os.getenv("LITELLM_API_KEY", "dummy-key")
-    LITELLM_ENDPOINT: str = os.getenv("LITELLM_ENDPOINT", "http://localhost:4000")
-    LITELLM_MODEL_CHAT: str = os.getenv("LITELLM_MODEL_CHAT", "openai/chat")
-    LITELLM_MODEL_DEFAULT: str = os.getenv("LITELLM_MODEL_DEFAULT", "openai/default")
-    LITELLM_MODEL_EMBEDDING: str = os.getenv(
-        "LITELLM_MODEL_EMBEDDING", "openai/embedding"
-    )
-
     # External MCP Server
     EXTERNAL_FASTMCP_HOST: str = "0.0.0.0"
     EXTERNAL_FASTMCP_MOUNT_PATH: str = "external"
@@ -52,9 +43,6 @@ class BackendSettings(BaseSettings):
     EXTERNAL_FASTMCP_TRANSPORT: Literal["http", "sse", "stdio", "streamable-http"] = (
         "http"
     )
-
-    # Logging
-    LOGGING_LOG_LEVEL: str = "INFO"
 
     # FastAPI
     FASTAPI_ENV: str = "local"
@@ -67,11 +55,20 @@ class BackendSettings(BaseSettings):
     FASTMCP_PORT: int = 8100
     FASTMCP_TRANSPORT: Literal["http", "sse", "stdio", "streamable-http"] = "http"
 
+    # LiteLLM
+    LITELLM_API_KEY: str = os.getenv("LITELLM_API_KEY", "dummy-key")
+    LITELLM_ENDPOINT: str = os.getenv("LITELLM_ENDPOINT", "http://localhost:4000")
+    LITELLM_MODEL_CHAT: str = os.getenv("LITELLM_MODEL_CHAT", "openai/chat")
+    LITELLM_MODEL_DEFAULT: str = os.getenv("LITELLM_MODEL_DEFAULT", "openai/default")
+    LITELLM_MODEL_EMBEDDING: str = os.getenv(
+        "LITELLM_MODEL_EMBEDDING", "openai/embedding"
+    )
+
+    # Logging
+    LOGGING_LOG_LEVEL: str = "INFO"
+
     # Models
     MODELS_LLM: str = "openai/gpt-4o"
-
-    # OpenAI #
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
     # Postgres
     POSTGRES_ASYNC_API: str = Field("asyncpg", validation_alias="POSTGRES_ASYNC_API")
@@ -82,9 +79,6 @@ class BackendSettings(BaseSettings):
     POSTGRES_PORT: str = Field("5432", validation_alias="POSTGRES_PORT")
     POSTGRES_SYNC_API: str = Field("psycopg2", validation_alias="POSTGRES_SYNC_API")
     POSTGRES_USER: str = Field("postgres", validation_alias="POSTGRES_USER")
-
-    # Prometheus
-    PROMETHEUS_MULTIPROC_DIR: str = "/tmp"
 
     # Rate Limits
     RATE_LIMIT_LOGIN_LOCK_SECONDS: int = 600

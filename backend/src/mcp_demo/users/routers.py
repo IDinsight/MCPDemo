@@ -45,9 +45,11 @@ from mcp_demo.utils.general import generate_recovery_codes
 TAG_METADATA = {"description": "Manages users", "name": "User"}
 router = APIRouter(prefix="/user", tags=[TAG_METADATA["name"]])
 
-limiter = Limiter(key_func=get_remote_address, storage_uri=Settings.REDIS_URL)
-
+RATE_LIMIT_LOGIN_RATE = Settings.RATE_LIMIT_LOGIN_RATE
 REDIS_CACHE_PREFIX_CHAT = Settings.REDIS_CACHE_PREFIX_CHAT
+REDIS_URL = Settings.REDIS_URL
+
+limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)
 
 
 @router.get("/admin-panel")
@@ -349,7 +351,7 @@ async def register_first_user(
 
 
 @router.get("/{user_id}", response_model=UserRetrieve)
-@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def get_user(
     calling_user_db: Annotated[UserDB, Depends(get_current_user)],
     request: Request,  # pylint: disable=W0613
@@ -414,7 +416,7 @@ async def get_user(
 
 
 @router.delete("/{user_id}", response_model=UserDeleteResponse)
-@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def delete_user(
     calling_user_db: Annotated[UserDB, Depends(get_current_user)],
     request: Request,  # pylint: disable=W0613
@@ -500,7 +502,7 @@ async def delete_user(
 
 
 @router.put("/reset-password", response_model=UserRetrieve)
-@limiter.limit(Settings.RATE_LIMIT_LOGIN_RATE)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def reset_password(
     request: Request,  # pylint: disable=W0613
     user: UserResetPassword,
