@@ -410,6 +410,9 @@ async def generate_refresh_token(
     token is a long-lived token that can be used to obtain new access tokens without
     requiring the user/client to re-authenticate.
 
+    NB: Do not include `jti` in refresh tokens! Refresh tokens are opaque---they are
+    long, random, base64url-encoded strings that are not JWTs.
+
     Parameters
     ----------
     client_id
@@ -436,6 +439,7 @@ async def generate_refresh_token(
     payload = {
         "client_id": client_id,
         "exp": int(time.time()) + AUTH_TOKEN_REFRESH_TTL,
+        "grant_type": "client_credentials" if client_id else "password",
         "scope": " ".join(scopes),
         "sub": sub,
     }
@@ -591,18 +595,18 @@ async def get_jwt_token(
         )
 
         # 5.
+        jti_cache_key = REDIS_CACHE_PREFIX_JTI.format(jti=jti)
         is_set = await redis_client.set(
             ex=AUTH_TOKEN_TTL,
-            name=REDIS_CACHE_PREFIX_JTI.format(jti=jti),
+            name=jti_cache_key,
             nx=True,  # Only if it does not yet exist
             value=sub,
         )
         if is_set:
-            subj_set_key = REDIS_CACHE_PREFIX_SUB_JTIS.format(sub=sub)
-            await cast(
-                Awaitable[int],
-                redis_client.sadd(subj_set_key, REDIS_CACHE_PREFIX_JTI.format(jti=jti)),
+            subj_set_key = REDIS_CACHE_PREFIX_SUB_JTIS.format(
+                grant_type=grant_type, sub=sub
             )
+            await cast(Awaitable[int], redis_client.sadd(subj_set_key, jti_cache_key))
             await redis_client.expire(subj_set_key, AUTH_TOKEN_TTL)
 
             return token
@@ -1232,9 +1236,11 @@ async def rotate_refresh_token(
     refresh_token: str,
     revoke_access: bool,
 ) -> tuple[str, str, int, int]:
-    """Exchange a still‑valid refresh token for a fresh access + refresh token pair.
+    """Exchange a still‑valid refresh token for a fresh access and refresh token pair.
+    Also implements refresh‑token rotation---old refresh token is deleted immediately.
 
-    Implements refresh‑token rotation---old refresh token is deleted immediately.
+    The access token is a short-lived token used to access protected resources, while
+    the refresh token is a long-lived token used to obtain new access tokens.
 
     Parameters
     ----------
@@ -1247,32 +1253,36 @@ async def rotate_refresh_token(
     revoke_access
         If True, all outstanding access tokens for the subject of the refresh token
         will be revoked (deleted). This is useful for security purposes, such as when
-        a user logs out or changes their password.
+        a user/client logs out or changes their password/client secret.
 
     Returns
     -------
     tuple[str, str, int, int]
         A tuple containing the new access token, the new refresh token, the TTL of the
-        access token, and the TTL of the refresh token. The access token is a
-        short-lived token used to access protected resources, while the refresh token
-        is a long-lived token used to obtain new access tokens.
+        access token, and the TTL of the refresh token.
     """
 
     payload = await verify_refresh_token(
         redis_client=redis_client, refresh_token=refresh_token
     )
+    grant_type = payload["grant_type"]
+    scopes = payload["scope"].split()
+    sub = str(payload["sub"])
+    client_id = payload["client_id"] if grant_type == "client_credentials" else None
 
     # Delete the old refresh token (one‑time use).
-    token_hash = hashlib.sha256(
+    refresh_token_hash = hashlib.sha256(
         refresh_token.encode(), usedforsecurity=True
     ).hexdigest()
     await redis_client.delete(
-        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(token_hash=token_hash)
+        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(token_hash=refresh_token_hash)
     )
 
-    # Optional: delete every outstanding access token belonging to this subject.
+    # Delete every outstanding access token belonging to this subject.
     if revoke_access:
-        subj_set_key = REDIS_CACHE_PREFIX_SUB_JTIS.format(sub=payload["sub"])
+        subj_set_key = REDIS_CACHE_PREFIX_SUB_JTIS.format(
+            grant_type=grant_type, sub=sub
+        )
         jti_keys = (
             await cast(
                 Awaitable[set[str]],
@@ -1284,19 +1294,12 @@ async def rotate_refresh_token(
             await redis_client.delete(*jti_keys)
         await redis_client.delete(subj_set_key)
 
-    # Mint brand‑new refresh tokens.
-    scopes = payload["scope"].split()
+    # Mint brand‑new refresh token.
     access_token = await get_jwt_token(
-        grant_type="refresh_token",
-        redis_client=redis_client,
-        scopes=scopes,
-        sub=str(payload["sub"]),
+        grant_type="refresh_token", redis_client=redis_client, scopes=scopes, sub=sub
     )
     new_refresh_token, refresh_token_expires_in = await generate_refresh_token(
-        client_id=payload["client_id"],
-        redis_client=redis_client,
-        scopes=scopes,
-        sub=payload["sub"],
+        client_id=client_id, redis_client=redis_client, scopes=scopes, sub=sub
     )
 
     return access_token, new_refresh_token, AUTH_TOKEN_TTL, refresh_token_expires_in
@@ -1437,7 +1440,7 @@ async def verify_refresh_token(
 
     if not raw:
         raise HTTPException(
-            detail="Invalid refresh token", status_code=status.HTTP_401_UNAUTHORIZED
+            detail="Invalid refresh token.", status_code=status.HTTP_401_UNAUTHORIZED
         )
 
     return json.loads(raw)

@@ -85,6 +85,8 @@ async def get_jwks() -> JSONResponse:
     """
 
     jwks = await get_cached_jwks()
+    print(f"{jwks = }")
+    input()
     return JSONResponse(jwks)
 
 
@@ -447,7 +449,9 @@ async def token_endpoint(
 
 
 @router.post(
-    "/token/refresh", response_model=TokenResponse, summary="Rotate refresh token"
+    "/token/rotate-refresh-token",
+    response_model=TokenResponse,
+    summary="Rotate refresh token",
 )
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def refresh_token_endpoint(
@@ -487,17 +491,18 @@ async def refresh_token_endpoint(
     return TokenResponse(
         access_token=access_token,
         expires_in=access_token_expires_in,
-        token_type="bearer",
         refresh_token=new_refresh_token,
         refresh_token_expires_in=refresh_token_expires_in,
+        token_type="Bearer",
     )
 
 
 @router.post(
-    "/token/revoke",
+    "/token/revoke-token",
     response_model=RevokeTokenResponse,
     summary="Revoke a refresh or access token",
 )
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def revoke_token(
     request: Request,
     token: str = Form(..., description="Access or refresh token to revoke"),
@@ -508,6 +513,14 @@ async def revoke_token(
     If the token is an access token, it will be identified by its JTI (JWT ID) claim.
     If the token is a refresh token, it will be identified by its SHA-256 hash. The
     token is removed from the Redis cache, effectively invalidating it.
+
+    NB: `jti` is a required part of the *access* token specification since all access
+    tokens are stored in Redis with using `jti` as the key in order to support token
+    validation and revocation. However, it is never included in *refresh* tokens,
+    because refresh tokens are opaque---they are long, random base64url-encoded strings
+    that are now JWTs. Thus if `jwt.get_unverified_claims(token)` succeeds and includes
+    a `jti` field, then it's an access token. Otherwise, if that fails (e.g. invalid
+    JWT format), or `jti` is missing, then we treat it as a refresh token.
 
     Parameters
     ----------
