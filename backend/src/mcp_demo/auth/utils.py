@@ -148,10 +148,14 @@ class ClientCredentialsRequestForm:
         client_id: str | None = Form(None, min_length=1),
         client_secret: str | None = Form(None, min_length=1),
         grant_type: str = Form(
-            "client_credentials", regex="^(client_credentials|password)$"
+            ...,
+            description="Either client_credentials or password",
+            regex="^(client_credentials|password)$",
         ),
         password: str | None = Form(None, min_length=1),
-        scope: str = Form(default=""),
+        requested_scope: str = Form(
+            default="", description="Space separated list of scopes"
+        ),
         username: str | None = Form(None, min_length=1),
     ) -> None:
         """
@@ -168,7 +172,7 @@ class ClientCredentialsRequestForm:
         password
             The password of the user for password grant type. Optional, only used for
             password grant.
-        scope
+        requested_scope
             Space-separated list of scopes requested by the client.
         username
             The username of the user for password grant type. Optional, only used for
@@ -184,12 +188,35 @@ class ClientCredentialsRequestForm:
         self.client_secret = client_secret
         self.grant_type = grant_type
         self.password = password
-        self.scopes: list[str] = scope.split()
+        self.scopes: list[str] = requested_scope.split()
         self.username = username
 
 
 def _build_keys_by_kid(*, new_jwks: dict[str, Any]) -> dict[str, Any]:
     """Build a dictionary mapping key IDs (kid) to JWKs and their compiled public keys.
+
+    This function's purpose is to make JWT signature verification efficient and secure.
+    It builds a fast lookup map so that later, when a JWT comes in, we can verify its
+    signature without scanning every key in the JWKS.
+
+    The naive way is to do:
+
+    # Bad: loop over every key in jwks["keys"]
+    for key in jwks["keys"]:
+        try:
+            jwt.decode(token, key, ...)
+
+    With the lookup map, we can do:
+
+    # Good: extract `kid`, use direct lookup
+    jwk = jwks["keys_by_kid"][kid]["jwk"]
+    key = jwks["keys_by_kid"][kid]["public_key"]
+
+    Thus, the lookup map avoids unnecessary computation and also ensures that we are
+    using the right key (important when we support multiple keys due to key rotation).
+
+    This lookup map is used (e.g., in `_verify_caller()`) to quickly find the
+    corresponding JWK and its compiled public key for verifying JWT signatures.
 
     Parameters
     ----------
@@ -204,8 +231,17 @@ def _build_keys_by_kid(*, new_jwks: dict[str, Any]) -> dict[str, Any]:
         public key in PEM format. The structure is:
 
         {
-            "kid-1": {"jwk": {...}, "public_key": cryptography.PublicKey},
-            ...
+          "kid-1234abcd": {
+            "jwk": {
+              "alg": "RS256",
+              "kty": "RSA",
+              "n": "...",
+              "e": "...",
+              "kid": "kid-1234abcd"
+            },
+            "public_key": "-----BEGIN PUBLIC KEY-----\nMIIBIjANB..."
+          },
+          ...
         }
     """
 
@@ -315,9 +351,8 @@ async def _verify_caller(
     ------
     HTTPException
         If the token is invalid, expired, or does not contain the required scopes.
-        This exception will have a status code of 401 (Unauthorized) if the token
-        cannot be validated, or 403 (Forbidden) if the token does not have the
-        required scopes.
+        If the token's grant type does not match the expected `grant_type`, or if the
+        token does not contain a valid `jti` (JWT ID) that exists in Redis.
     """
 
     credentials_exception = HTTPException(
@@ -331,16 +366,15 @@ async def _verify_caller(
 
     options = options or {}
     options.update({"require_exp": True, "verify_aud": True, "verify_signature": True})
-    required_scopes = required_scopes or set()
     token = sanitize_token(token=token)
 
     try:
-        header = jwt.get_unverified_header(token)
+        header = jwt.get_unverified_header(token)  # alg, kid, typ
         kid = header.get("kid")
         if not kid:
             raise credentials_exception
         last_jwks = await load_jwks()
-        key_info = last_jwks["keys_by_kid"].get(kid, None)  # Cache the compiled key
+        key_info = last_jwks["keys_by_kid"].get(kid, None)  # Fast lookup
         if key_info is None:  # Try one forced refresh
             jwks = await load_jwks(force_refresh=True)
             key_info = jwks["keys_by_kid"].get(kid, None)
@@ -371,8 +405,9 @@ async def _verify_caller(
         raise credentials_exception
 
     # Enforce scopes.
+    sanitized_scopes = sanitize_scopes(requested_scopes=list(required_scopes or []))
     token_scopes = {s.strip().lower() for s in payload.get("scope", "").split()}
-    if not required_scopes.issubset(token_scopes):
+    if not set(sanitized_scopes).issubset(token_scopes):
         raise HTTPException(
             detail="Insufficient permissions", status_code=status.HTTP_403_FORBIDDEN
         )
@@ -522,9 +557,9 @@ async def get_jwt_token(
          time, and expiration time.
     4. Sign with RS256 and embed the kid so verifiers find the right JWK.
     5. Store the JWT ID (jti) in Redis with a TTL equal to the token's expiration time,
-        ensuring that the same jti cannot be reused within the token's lifetime. If
-        the jti already exists, retry up to `max_attempts` times to generate a unique
-        jti. If it still fails, raise an error.
+        ensuring that the same jti cannot be reused within the token's lifetime. If the
+        jti already exists, retry up to `max_attempts` times to generate a unique jti.
+        If it still fails, raise an error.
 
     Parameters
     ----------
@@ -558,9 +593,7 @@ async def get_jwt_token(
     """
 
     # 1.
-    invalid_scopes = set(scopes) - AUTH_ALLOWED_SCOPES
-    if invalid_scopes:
-        raise ValueError(f"Unrecognised scopes requested: {', '.join(invalid_scopes)}")
+    scopes = sanitize_scopes(requested_scopes=scopes)
 
     # 2.
     passphrase = passphrase or AUTH_RSA_PASSPHRASE.get_secret_value()
@@ -572,7 +605,6 @@ async def get_jwt_token(
     max_attempts = 3
     attempt_num = 1
     while attempt_num <= max_attempts:
-        # 3.
         jti = token_hex(12)
         now = int(time.time())
         payload = {
@@ -589,9 +621,8 @@ async def get_jwt_token(
         }
 
         # 4.
-        token = cast(
-            str,
-            pyjwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid}),
+        token = pyjwt.encode(
+            algorithm="RS256", headers={"kid": kid}, key=private_key, payload=payload
         )
 
         # 5.
@@ -620,6 +651,9 @@ async def get_latest_private_key_and_kid(
 ) -> tuple[rsa.RSAPrivateKey, str]:
     """Get the latest private key and its key ID (kid) for signing JWT tokens.
 
+    NB: Private keys are only applicable for `client_credentials` and `password` grant
+    types.
+
     Parameters
     ----------
     jwks_fn
@@ -635,6 +669,7 @@ async def get_latest_private_key_and_kid(
     """
 
     jwks = await load_jwks(jwks_fn=jwks_fn)
+
     if not jwks["keys"]:
         # First run – create a pair automatically.
         kid = await rotate_keys(jwks_fn=jwks_fn, passphrase=passphrase)
@@ -642,10 +677,10 @@ async def get_latest_private_key_and_kid(
         # Read the first (only) kid from jwks.json.
         kid = jwks["keys"][0]["kid"]
 
-    private_key_fp = _SECRETS_DIR / f"private_{kid}.pem"
-
     return (
-        load_private_key(passphrase=passphrase, private_key_fp=private_key_fp),
+        load_private_key(
+            passphrase=passphrase, private_key_fp=_SECRETS_DIR / f"private_{kid}.pem"
+        ),
         kid,
     )
 
@@ -728,9 +763,9 @@ async def load_jwks(
         and jwks_fp.is_file()
         and jwks_fp.stat().st_mtime == _JWKS_MTIME
     ):
-        return _JWKS_CACHE  # Unchanged – return as-is
+        return _JWKS_CACHE  # Unchanged, return as is
 
-    # Slow path --- acquire the process-wide lock and (re)load the file.
+    # Slow path---acquire the process-wide lock and (re)load the file.
     async with process_lock():
         # Re-evaluate in case another coroutine refreshed while we were waiting.
         if (
@@ -1016,12 +1051,7 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
             token=token,
         )
         token_scopes = {s.strip().lower() for s in claims.get("scope", "").split()}
-        if isinstance(token_scopes, str):
-            token_scopes = {token_scopes}
-        elif isinstance(token_scopes, list):
-            token_scopes = set(token_scopes)
-
-        if not required_scopes <= token_scopes:
+        if not required_scopes <= set(token_scopes):
             raise HTTPException(
                 detail="Insufficient scope", status_code=status.HTTP_403_FORBIDDEN
             )
@@ -1044,19 +1074,32 @@ async def rotate_keys(
     """Generate a new RSA key-pair, add it to `jwks.json`, delete keys older than
     `AUTH_ROTATION_KEEP_LAST_N`.
 
+    NB: Key rotation is only applicable for `client_credentials` and `password` grant
+    types.
+
     The process is as follows:
 
-    1. Generate a new kid (key ID) for the new key pair.
-    2. Generate a new RSA key pair (private and public keys).
-    3. Save the private and public keys to a PEM file, optionally encrypted with a
-        passphrase.
-    4. Load the existing JWKS (JSON Web Key Set) from `jwks.json`.
-    5. Add the new key to the JWKS, ensuring it is at the top of the list. Prune the
+    1. Ensure only one key rotation can happen at a time, avoiding race conditions
+        across threads/processes.
+    2. Generate a new random 16 character key ID (kid) for the new key pair.
+    3. Generate a new RSA key pair (private and public keys) in a thread-safe manner
+        (i.e., off the main event loop).
+    4. Save the private and public keys to a PEM file, optionally encrypted with a
+        passphrase. This allows recovery across restarts and auditing past keys.
+    5. Load the existing JWKS (JSON Web Key Set) from `jwks.json` and make a deep copy
+        to avoid mutating the in-memory cache.
+    6. Add the new key to the JWKS, ensuring it is at the top of the list. Prune the
         oldest keys, keeping only the most recent `AUTH_ROTATION_KEEP_LAST_N` keys.
-    6. Rebuild the helper map `keys_by_kid` to allow fast lookups by key ID (kid).
-    7. Save the updated JWKS back to `jwks.json`.
-    8. Update the in-memory cache of the JWKS and its last modified time so that the
-        current process can use the new key immediately.
+        This ensures the JWKS only retains a small, rolling window of valid
+        verification keys.
+    7. Rebuild the lookup map `keys_by_kid` to allow fast lookups by key ID (kid).
+    8. Save the updated JWKS back to `jwks.json`. This serves as the canonical source
+        for clients perfoorming JWKS fetches.
+    9. Update the in-memory cache of the JWKS and its last modified time so that the
+        current process can use the new key immediately. This replaces in-memory JWKS
+        cache so subsequent JWT issuance/verification uses the fresh key immediately.
+    10. Verify that the newly generated kid doesn't exist in the remaining older keys.
+        This guards against hte (extremely rare) chance of collision in key IDs.
 
     Parameters
     ----------
@@ -1083,16 +1126,17 @@ async def rotate_keys(
         error in the key management process.
     """
 
+    # 1.
     async with process_lock():
-        # 1.
-        kid = token_hex(8)  # 16-char random key ID
-
         # 2.
+        kid = token_hex(8)
+
+        # 3.
         private_key, public_key = await asyncio.to_thread(
             generate_rsa_keypair, key_size=key_size
         )
 
-        # 3.
+        # 4.
         await asyncio.to_thread(
             save_keypair,
             passphrase=passphrase,
@@ -1102,12 +1146,12 @@ async def rotate_keys(
             public_key_fp=_SECRETS_DIR / f"public_{kid}.pem",
         )
 
-        # 4.
-        jwks = deepcopy(await load_jwks(jwks_fn=jwks_fn, force_refresh=True))
-        new_public_jwk = jwk_from_public_key(kid=kid, public_key=public_key)
-        jwks["keys"].insert(0, new_public_jwk)  # Safe – private copy
-
         # 5.
+        jwks = deepcopy(await load_jwks(jwks_fn=jwks_fn, force_refresh=True))
+
+        # 6.
+        new_public_jwk = jwk_from_public_key(kid=kid, public_key=public_key)
+        jwks["keys"].insert(0, new_public_jwk)  # Safe, private copy
         while len(jwks["keys"]) > keep_last_n:
             # Remove **oldest** JWK.
             old = jwks["keys"].pop()
@@ -1121,16 +1165,18 @@ async def rotate_keys(
                 (_SECRETS_DIR / f"public_{old_kid}.pem").unlink, missing_ok=True
             )
 
-        # 6.
+        # 7.
         jwks["keys_by_kid"] = _build_keys_by_kid(new_jwks=jwks)
 
-        # 7.
-        await asyncio.to_thread(save_jwks, jwks=jwks, jwks_fn=jwks_fn)
-
         # 8.
-        mtime = (_SECRETS_DIR / jwks_fn).stat().st_mtime
-        _set_cache(new_jwks=jwks, mtime=mtime)
+        jwks_fp = _SECRETS_DIR / jwks_fn
+        mtime = jwks_fp.stat().st_mtime
+        await asyncio.to_thread(save_jwks, jwks=jwks, jwks_fp=jwks_fp)
 
+        # 9.
+        _set_cache(mtime=mtime, new_jwks=jwks)
+
+        # 10.
         if kid in {key["kid"] for key in jwks["keys"][1:]}:
             raise ValueError(f"Duplicate kid detected after rotation: {kid}")
 
@@ -1209,10 +1255,10 @@ async def rotate_keys_with_redis(
             jwks = {"keys": []}
 
         # 5.
-        new_jwk = jwk_from_public_key(kid=kid, public_key=public_key)
+        new_public_jwk = jwk_from_public_key(kid=kid, public_key=public_key)
 
         # 6.
-        jwks["keys"] = [new_jwk, *[k for k in jwks["keys"] if k["kid"] != kid]][
+        jwks["keys"] = [new_public_jwk, *[k for k in jwks["keys"] if k["kid"] != kid]][
             :keep_last_n
         ]
 
@@ -1339,22 +1385,24 @@ def sanitize_scopes(*, requested_scopes: list[str] | None) -> list[str]:
     return list(sorted(set(requested_scopes)))
 
 
-def save_jwks(*, jwks: dict[str, Any], jwks_fn: str = AUTH_JWKS_FN) -> None:
-    """Save the JWKS (JSON Web Key Set) to a file.
+def save_jwks(*, jwks: dict[str, Any], jwks_fp: str | Path) -> None:
+    """Save the JWKS (JSON Web Key Set) to file.
+
+    NB: JWKS is only applicable for `client_credentials` and `password` grant types.
 
     Parameters
     ----------
     jwks
         The JWKS to be saved, typically containing one or more JWKs (JSON Web Keys).
-    jwks_fn
-        The filename for the JWKS (JSON Web Key Set) file.
+    jwks_fp
+        The file path where the JWKS will be saved.
     """
 
     atomic_write(
         data=json.dumps(jwks, ensure_ascii=False, separators=(",", ":")).encode(),
         mode="wb",
         perm=0o640,
-        target_fp=_SECRETS_DIR / jwks_fn,
+        target_fp=jwks_fp,
     )
 
 

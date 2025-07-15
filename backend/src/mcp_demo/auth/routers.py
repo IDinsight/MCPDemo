@@ -78,6 +78,13 @@ async def get_jwks() -> JSONResponse:
     - In production, the endpoint must be served over HTTPS.
     - JWKS is cached by clients and refreshed according to `Cache-Control` headers.
 
+    NB: This endpoint cannot be specified to individual subjects because it is meant to
+    be used for **public** JWKS fetches (e.g., FastMCP or other OAuth2 clients). In
+    other words, the `Settings.AUTH_JWKS_URI` must be a **fixed** URI for the
+    authorization server at load time and, thus, there is no way for clients to inject
+    things like `grant_type` or `sub` into the request. Although we could pass values
+    in via query parameters, clients would not know how to do this.
+
     Returns
     -------
     JSONResponse
@@ -85,7 +92,7 @@ async def get_jwks() -> JSONResponse:
     """
 
     jwks = await get_cached_jwks()
-    return JSONResponse(jwks)
+    return JSONResponse({"keys": jwks["keys"]})  # Exclude internal metadata
 
 
 @router.post("/introspect", response_model=IntrospectionResponse)

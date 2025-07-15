@@ -77,16 +77,15 @@ class AuditMiddleware(BaseHTTPMiddleware):
             sub = request.state.audit_sub
         else:
             raw_token = request.headers.get("authorization", None)
-            if raw_token:
-                token = sanitize_token(token=raw_token)
-            else:
-                token = request.cookies.get("access_token", "")
+            token = (
+                sanitize_token(token=raw_token)
+                if raw_token
+                else request.cookies.get("access_token", "")
+            )
 
             try:
-                payload = await _verify_caller(
-                    redis_client=request.app.state.redis,
-                    required_scopes=set(),  # No scopes needed for audit
-                    token=token,
+                payload = await _verify_caller(  # No scopes needed for audit
+                    redis_client=request.app.state.redis, token=token
                 )
                 sub = payload["sub"]
             except Exception:  # pylint: disable=W0718

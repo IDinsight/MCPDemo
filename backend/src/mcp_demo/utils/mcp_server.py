@@ -248,7 +248,10 @@ def get_bearer_auth_provider() -> BearerAuthProvider:
         audience=Settings.AUTH_AUDIENCE,
         issuer=Settings.AUTH_TOKEN_ISSUER,
         jwks_uri=Settings.AUTH_JWKS_URI,
-        required_scopes=["read"],
+        required_scopes=[  # This dictates what scopes are required for the client
+            "admin",
+            "read",
+        ],
     )
 
     return auth
