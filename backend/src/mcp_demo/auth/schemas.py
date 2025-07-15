@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 # Package Library
 from mcp_demo.config import Settings
 
+AUTH_TOKEN_TTL = Settings.AUTH_TOKEN_TTL
+
 
 class IntrospectionResponse(BaseModel):
     """Pydantic model for introspection response."""
@@ -37,7 +39,7 @@ class TokenResponse(BaseModel):
         description="RS256 JWT with `sub`, `iss`, `aud`, `exp`, and optionally `scope`",
     )
     expires_in: int = Field(
-        Settings.AUTH_TOKEN_TTL, description="Lifetime of the token in seconds"
+        AUTH_TOKEN_TTL, description="Lifetime of the token in seconds"
     )
     refresh_token: str
     refresh_token_expires_in: int

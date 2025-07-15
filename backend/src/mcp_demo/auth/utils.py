@@ -596,7 +596,7 @@ async def get_jwt_token(
                 Awaitable[int],
                 redis_client.sadd(subj_set_key, REDIS_CACHE_PREFIX_JTI.format(jti=jti)),
             )
-            await redis_client.expire(subj_set_key, Settings.AUTH_TOKEN_TTL)
+            await redis_client.expire(subj_set_key, AUTH_TOKEN_TTL)
 
             return token
         attempt_num += 1
@@ -797,7 +797,7 @@ async def load_jwks_from_redis(
             await rotate_keys_with_redis(
                 keep_last_n=AUTH_ROTATION_KEEP_LAST_N,
                 key_size=AUTH_RSA_KEY_SIZE,
-                passphrase=Settings.AUTH_RSA_PASSPHRASE.get_secret_value(),
+                passphrase=AUTH_RSA_PASSPHRASE.get_secret_value(),
                 redis_client=redis_client,
             )
             raw = await redis_client.get(REDIS_CACHE_PREFIX_JWKS_CURRENT)
