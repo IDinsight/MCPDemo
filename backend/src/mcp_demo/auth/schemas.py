@@ -1,5 +1,8 @@
 """This module contains Pydantic models for auth."""
 
+# Standard Library
+from typing import Literal
+
 # Third Party Library
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,6 +30,15 @@ class RefreshTokenRequestForm(BaseModel):
 
     refresh_token: str = Field(..., min_length=80)
     revoke_access: bool = False  # Set to True to revoke all old access tokens
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RevokeTokenResponse(BaseModel):
+    """Pydantic model for token revocation response."""
+
+    revoked_token: str
+    type: Literal["access_token", "refresh_token"]
 
     model_config = ConfigDict(from_attributes=True)
 

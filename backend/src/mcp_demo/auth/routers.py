@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mcp_demo.auth.schemas import (
     IntrospectionResponse,
     RefreshTokenRequestForm,
+    RevokeTokenResponse,
     TokenResponse,
 )
 from mcp_demo.auth.utils import (
@@ -91,9 +92,9 @@ async def get_jwks() -> JSONResponse:
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def introspect_token(
     request: Request,
+    token: str,
     asession: AsyncSession = Depends(get_async_session),
-    credentials: HTTPBasicCredentials | None = Depends(basic_auth),
-    token: str = Form(..., description="Access or refresh token to introspect"),
+    form: ClientCredentialsRequestForm = Depends(),
 ) -> IntrospectionResponse:
     """RFC 7662-style token introspection.
 
@@ -102,16 +103,16 @@ async def introspect_token(
 
     The process is as follows:
 
-    1. The caller must provide HTTP Basic credentials to authenticate.
-    2. The caller's identity is verified against the database:
-        - If a client ID is provided, it must match a registered client with a valid
-            secret.
-        - If a username is provided, it must match a registered user with a valid
-            password.
-    3. The JWT is decoded and validated:
-        - Signature, expiry, and replay (jti) checks are performed.
-    4. The introspection response is built, indicating whether the token is active,
+    1. The caller's identity is verified against the database. If the grant type is
+        `client_credentials`, then a client ID and client secret must be provided and
+        it must match a client in the database. If the grant type is `password`, then
+        a username and password must be provided and it must match a user in the
+        database.
+    2. The JWT is decoded and validated---signature, expiry, and replay (jti) checks
+        are performed.
+    3. The introspection response is built, indicating whether the token is active,
         its expiry, scopes, and subject/client ID.
+    4. The caller's identity is set in the request state for auditing purposes.
     5. The response is checked to ensure the token belongs to the authenticated client
         or user:
 
@@ -119,13 +120,14 @@ async def introspect_token(
     ----------
     request
         The FastAPI request object. This is needed for SlowAPI rate limiting.
+    token
+        The JWT token to introspect.
     asession
         The SQLAlchemy async session to use for all database connections.
-    credentials
-        Optional HTTP Basic credentials for client authentication. If provided, the
-        caller must be a registered client with a valid secret.
-    token
-        The JWT token to introspect, provided as a form field.
+    form
+        Form data covering both client_credentials and password grants:
+            - `grant_type`: one of "client_credentials" or "password"
+            - required fields vary by grant type
 
     Returns
     -------
@@ -143,22 +145,11 @@ async def introspect_token(
     """
 
     # 1.
-    if credentials is None:
-        raise HTTPException(
-            detail="Basic authentication required",
-            status_code=status.HTTP_401_UNAUTHORIZED,
-        )
+    caller_db, jwt_options = await check_introspection_call(
+        asession=asession, form=form
+    )
 
     # 2.
-    caller_db, jwt_options = await check_introspection_call(
-        asession=asession, credentials=credentials
-    )
-    if isinstance(caller_db, Oauth2ClientDB):
-        request.state.audit_sub = caller_db.client_id  # Machine account for logging
-    else:
-        request.state.audit_sub = caller_db.user_id  # Human user for logging
-
-    # 3.
     try:
         claims = await _verify_caller(  # Introspection needs no scopes
             options=jwt_options, redis_client=request.app.state.redis, token=token
@@ -167,7 +158,7 @@ async def introspect_token(
     except HTTPException:
         return IntrospectionResponse(active=False)
 
-    # 4.
+    # 3.
     is_client = claims.get("gty") == "client_credentials"
     response = {
         "active": True,
@@ -177,6 +168,12 @@ async def introspect_token(
         "sub": None if is_client else int(claims["sub"]),
         "token_type": "access_token",
     }
+
+    # 4.
+    if isinstance(caller_db, Oauth2ClientDB):
+        request.state.audit_sub = caller_db.client_id  # Machine account for logging
+    else:
+        request.state.audit_sub = caller_db.user_id  # Human user for logging
 
     # 5.
     if (
@@ -413,13 +410,13 @@ async def refresh_token_endpoint(
 
 @router.post(
     "/token/revoke",
-    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=RevokeTokenResponse,
     summary="Revoke a refresh or access token",
 )
 async def revoke_token(
     request: Request,
     token: str = Form(..., description="Access or refresh token to revoke"),
-) -> None:
+) -> RevokeTokenResponse:
     """Revoke a refresh or access token.
 
     This endpoint allows clients to revoke either an access token or a refresh token.
@@ -433,6 +430,11 @@ async def revoke_token(
         The FastAPI request object, used to access the Redis client.
     token
         The JWT token to revoke, which can be either an access token or a refresh token.
+
+    Returns
+    -------
+    RevokeTokenResponse
+        A response indicating the revoked token.
     """
 
     redis_client = request.app.state.redis
@@ -443,17 +445,19 @@ async def revoke_token(
         jti = claims.get("jti")
         if jti:
             await redis_client.delete(REDIS_CACHE_PREFIX_JTI.format(jti=jti))
-            return
+            return RevokeTokenResponse(revoked_token=token, type="access_token")
     except JWTError:
         pass
 
-    # Else treat as refresh token.
+    # Otherwise treat as refresh token.
     token_hash = hashlib.sha256(token.encode(), usedforsecurity=True).hexdigest()
     await redis_client.delete(REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(hash=token_hash))
 
+    return RevokeTokenResponse(revoked_token=token, type="refresh_token")
+
 
 async def check_introspection_call(
-    *, asession: AsyncSession, credentials: HTTPBasicCredentials
+    *, asession: AsyncSession, form: ClientCredentialsRequestForm
 ) -> tuple[Oauth2ClientDB | UserDB, dict[str, Any]]:
     """Check if the caller is authenticated for introspection.
 
@@ -465,8 +469,10 @@ async def check_introspection_call(
     ----------
     asession
         The SQLAlchemy async session to use for all database connections.
-    credentials
-        The HTTP Basic credentials provided by the caller.
+    form
+        Form data covering both client_credentials and password grants:
+            - `grant_type`: one of "client_credentials" or "password"
+            - required fields vary by grant type
 
     Returns
     -------
@@ -482,30 +488,31 @@ async def check_introspection_call(
     caller_db: Optional[Oauth2ClientDB | UserDB] = None
     options: dict[str, Any] = {}
 
-    try:  # Try to authenticate as a client first.
-        client_db = await verify_client(
-            asession=asession,
-            client_id=credentials.username,
-            client_secret=credentials.password,
-        )
-        if client_db:
-            caller_db = client_db
-            options = {
-                "verify_aud": True,
-                "verify_exp": True,
-                "verify_iat": True,
-                "verify_iss": True,
-                "verify_nbf": True,
-            }
-    except Oauth2ClientNotFoundError:
-        pass
+    if form.grant_type == "client_credentials":
+        try:  # Try to authenticate as a client first
+            client_db = await verify_client(
+                asession=asession,
+                client_id=form.client_id,
+                client_secret=form.client_secret,
+            )
+            if client_db:
+                caller_db = client_db
+                options = {
+                    "verify_aud": True,
+                    "verify_exp": True,
+                    "verify_iat": True,
+                    "verify_iss": True,
+                    "verify_nbf": True,
+                }
+        except Oauth2ClientNotFoundError:
+            pass
 
     if not caller_db:
-        try:  # Try to authenticate as a user second.
+        try:  # Try to authenticate as a user second
             user_db = await verify_user(
                 asession=asession,
-                password=credentials.password,
-                username=credentials.username,
+                password=form.password,
+                username=form.username,
             )
             if user_db:
                 caller_db = user_db
