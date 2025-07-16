@@ -19,7 +19,7 @@ class IntrospectionResponse(BaseModel):
     client_id: str | None = None  # `client_id` if client_credentials grant
     exp: int | None = None
     scope: str | None = None
-    sub: int | None = None  # `user_id` if password grant
+    sub: str | int | None = None  # `user_id` if password grant
     token_type: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -55,6 +55,7 @@ class TokenResponse(BaseModel):
     )
     refresh_token: str
     refresh_token_expires_in: int
+    scopes: list[str]
     token_type: str = Field("Bearer", description="Type of the token, always 'bearer'")
 
     model_config = ConfigDict(from_attributes=True)

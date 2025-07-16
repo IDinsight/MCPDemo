@@ -399,7 +399,13 @@ async def _verify_caller(
             REDIS_CACHE_PREFIX_JTI.format(jti=jti)
         ):
             raise credentials_exception
-    except (AssertionError, KeyError, StopIteration, JWTError) as exc:
+    except (
+        AssertionError,
+        KeyError,
+        StopIteration,
+        JWTError,
+        pyjwt.exceptions.ExpiredSignatureError,
+    ) as exc:
         raise credentials_exception from exc
 
     if not payload.get("sub"):

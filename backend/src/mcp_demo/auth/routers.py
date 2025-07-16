@@ -106,6 +106,7 @@ from mcp_demo.auth.utils import (
     get_cached_jwks,
     get_jwt_token,
     get_least_privileged_scopes,
+    require_scopes,
     rotate_refresh_token,
 )
 from mcp_demo.clients.models import Oauth2ClientDB
@@ -201,8 +202,7 @@ async def get_jwks() -> JSONResponse:
 async def introspect_token(
     request: Request,
     token: str,
-    asession: AsyncSession = Depends(get_async_session),
-    form: ClientCredentialsRequestForm = Depends(),
+    claims: dict = require_scopes(required_scopes={"admin"}),
 ) -> IntrospectionResponse:
     """RFC 7662-style token introspection.
 
@@ -211,18 +211,12 @@ async def introspect_token(
 
     The process is as follows:
 
-    1. The caller's identity is verified against the database. If the grant type is
-        `client_credentials`, then a client ID and client secret must be provided and
-        it must match a client in the database. If the grant type is `password`, then
-        a username and password must be provided and it must match a user in the
-        database.
+    1. Extract the grant type and subject from the claims of the authenticated caller.
     2. The JWT is decoded and validated---signature, expiry, and replay (jti) checks
         are performed.
     3. The introspection response is built, indicating whether the token is active,
         its expiry, scopes, and subject/client ID.
     4. The caller's identity is set in the request state for auditing purposes.
-    5. The response is checked to ensure the token belongs to the authenticated client
-        or user:
 
     Parameters
     ----------
@@ -230,12 +224,9 @@ async def introspect_token(
         The FastAPI request object. This is needed for SlowAPI rate limiting.
     token
         The JWT token to introspect.
-    asession
-        The SQLAlchemy async session to use for all database connections.
-    form
-        Form data covering both client_credentials and password grants:
-            - `grant_type`: one of "client_credentials" or "password"
-            - required fields vary by grant type
+    claims
+        The claims of the authenticated caller, used to verify scopes, grant type, and
+        subject.
 
     Returns
     -------
@@ -253,42 +244,41 @@ async def introspect_token(
     """
 
     # 1.
-    caller_db, jwt_options = await check_introspection_call(
-        asession=asession, form=form
-    )
+    grant_type = claims["gty"]
+    subject = claims["sub"]
+    client_id = subject if grant_type == "client_credentials" else None
+    if grant_type == "client_credentials":
+        options: dict[str, Any] = {
+            "verify_aud": True,
+            "verify_exp": True,
+            "verify_iat": True,
+            "verify_iss": True,
+            "verify_nbf": True,
+        }
+    else:
+        options = {"require": ["exp", "sub"]}
 
     # 2.
     try:
         claims = await _verify_caller(  # Introspection needs no scopes
-            options=jwt_options, redis_client=request.app.state.redis, token=token
+            options=options, redis_client=request.app.state.redis, token=token
         )
 
     except HTTPException:
         return IntrospectionResponse(active=False)
 
     # 3.
-    is_client = claims.get("gty") == "client_credentials"
     response = {
         "active": True,
-        "client_id": claims["sub"] if is_client else None,
+        "client_id": client_id,
         "exp": claims["exp"],
         "scope": claims.get("scope", ""),
-        "sub": None if is_client else int(claims["sub"]),
+        "sub": subject,
         "token_type": "access_token",
     }
 
     # 4.
-    if isinstance(caller_db, Oauth2ClientDB):
-        request.state.audit_sub = caller_db.client_id  # Machine account for logging
-    else:
-        request.state.audit_sub = caller_db.user_id  # Human user for logging
-
-    # 5.
-    if (
-        isinstance(caller_db, Oauth2ClientDB)
-        and response["client_id"] != caller_db.client_id
-    ) or (isinstance(caller_db, UserDB) and response["sub"] != caller_db.user_id):
-        return IntrospectionResponse(active=False)
+    request.state.audit_sub = subject  # Set subject in request state for auditing
 
     return IntrospectionResponse(**response)
 
@@ -498,6 +488,7 @@ async def token_endpoint(
                 expires_in=AUTH_TOKEN_TTL,
                 refresh_token=refresh_token,
                 refresh_token_expires_in=refresh_token_expires_in,
+                scopes=requested_scopes,
                 token_type="Bearer",
             )
         case "password":
@@ -561,6 +552,7 @@ async def token_endpoint(
                 expires_in=AUTH_TOKEN_TTL,
                 refresh_token=refresh_token,
                 refresh_token_expires_in=refresh_token_expires_in,
+                scopes=requested_scopes,
                 token_type="Bearer",
             )
 

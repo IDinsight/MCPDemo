@@ -148,9 +148,11 @@ async def calculate_bmi(*, height: float, weight: float) -> float:
     access_token: AccessToken | None = get_access_token()
     assert access_token is not None
     user_scopes = access_token.scopes
-
+    assert access_token is not None
+    assert user_scopes is not None
     required_scope = "admin"
-    if user_scopes and required_scope not in user_scopes:
+
+    if required_scope not in user_scopes:
         raise ToolError(
             f"Insufficient permissions: '{required_scope}' scope required. "
             f"Got: {user_scopes}"
