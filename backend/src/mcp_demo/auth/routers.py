@@ -81,7 +81,7 @@ Notes:
 # Standard Library
 import hashlib
 
-from typing import Any, Optional
+from typing import Any
 
 # Third Party Library
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -109,11 +109,9 @@ from mcp_demo.auth.utils import (
     require_scopes,
     rotate_refresh_token,
 )
-from mcp_demo.clients.models import Oauth2ClientDB
-from mcp_demo.clients.utils import Oauth2ClientNotFoundError, verify_client
+from mcp_demo.clients.utils import verify_client
 from mcp_demo.config import Settings
-from mcp_demo.users.models import UserDB
-from mcp_demo.users.utils import UserNotFoundError, get_user_scopes_by_id, verify_user
+from mcp_demo.users.utils import get_user_scopes_by_id, verify_user
 from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.rate_limit import (
     is_locked_out,
@@ -719,77 +717,3 @@ async def revoke_token(
     )
 
     return RevokeTokenResponse(revoked_token=token, type="refresh_token")
-
-
-async def check_introspection_call(
-    *, asession: AsyncSession, form: ClientCredentialsRequestForm
-) -> tuple[Oauth2ClientDB | UserDB, dict[str, Any]]:
-    """Check if the caller is authenticated for introspection.
-
-    This function attempts to authenticate the caller as either a client or a user. If
-    the caller is authenticated, it returns the JWT options to use for decoding. If the
-    caller is not authenticated, it raises an HTTPException.
-
-    Parameters
-    ----------
-    asession
-        The SQLAlchemy async session to use for all database connections.
-    form
-        Form data covering both client_credentials and password grants:
-            - `grant_type`: one of "client_credentials" or "password"
-            - required fields vary by grant type
-
-    Returns
-    -------
-    tuple[Oauth2ClientDB | UserDB, dict[str, Any]]
-        A tuple containing the authenticated caller's database object and JWT options.
-
-    Raises
-    ------
-    HTTPException
-        If the caller is not authenticated, or if the credentials are invalid.
-    """
-
-    caller_db: Optional[Oauth2ClientDB | UserDB] = None
-    options: dict[str, Any] = {}
-
-    if form.grant_type == "client_credentials":
-        try:  # Try to authenticate as a client first
-            client_db = await verify_client(
-                asession=asession,
-                client_id=form.client_id,
-                client_secret=form.client_secret,
-            )
-            if client_db:
-                caller_db = client_db
-                options = {
-                    "verify_aud": True,
-                    "verify_exp": True,
-                    "verify_iat": True,
-                    "verify_iss": True,
-                    "verify_nbf": True,
-                }
-        except Oauth2ClientNotFoundError:
-            pass
-
-    if not caller_db:
-        try:  # Try to authenticate as a user second
-            user_db = await verify_user(
-                asession=asession,
-                password=form.password,
-                username=form.username,
-            )
-            if user_db:
-                caller_db = user_db
-                options = {"require": ["exp", "sub"]}
-        except UserNotFoundError:
-            pass
-
-    # Fail if neither authenticated.
-    if not caller_db:
-        raise HTTPException(
-            detail="Invalid credentials",
-            status_code=status.HTTP_401_UNAUTHORIZED,
-        )
-
-    return caller_db, options
