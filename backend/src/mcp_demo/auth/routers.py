@@ -86,7 +86,7 @@ from typing import Any, Optional
 # Third Party Library
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPBasic
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from jose import JWTError, jwt
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -308,6 +308,7 @@ async def introspect_token(
 async def token_endpoint(
     request: Request,
     asession: AsyncSession = Depends(get_async_session),
+    credentials: HTTPBasicCredentials = Depends(basic_auth),
     form: ClientCredentialsRequestForm = Depends(),
 ) -> JSONResponse | TokenResponse:
     """Issue a Bearer token via OAuth2 Client-Credentials **or** Password grant. Upon
@@ -385,12 +386,26 @@ async def token_endpoint(
         2. Or use SameSite=Lax/Strict for cookies if it fits the flows,
         3. Or rely solely on Authorization header tokens instead of cookies.
 
+    Note on Swagger UI
+    ------------------
+
+    Swagger‑UI (FastAPI “Authorize” button) follows the OAuth specifications for the
+    Client Credentials grant---it sends `client_id` and `client_secret` in the
+    Authorization header as HTTP Basic credentials, not as
+    application/x‑www‑form‑urlencoded fields. Thus, we need to handle this using
+    credentials from the HTTP Basic auth header, not from the form body.
+
     Parameters
     ----------
     request
         The FastAPI request object.
     asession
         The SQLAlchemy async session to use for all database connections.
+    credentials
+        The HTTP Basic credentials provided by the client. This is used to verify
+        the caller's identity if the grant type is "client_credentials". If the
+        grant type is "password", this parameter is ignored and the username and
+        password are taken from the form data.
     form
         Form data covering both client_credentials and password grants:
             - `grant_type`: one of "client_credentials" or "password"
@@ -418,7 +433,12 @@ async def token_endpoint(
 
     match form.grant_type:
         case "client_credentials":
-            client_id, client_secret = form.client_id, form.client_secret
+            client_id = form.client_id or (
+                credentials.username if credentials else None
+            )
+            client_secret = form.client_secret or (
+                credentials.password if credentials else None
+            )
 
             # 1.
             if await is_locked_out(

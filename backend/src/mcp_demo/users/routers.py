@@ -72,7 +72,7 @@ async def admin_panel(
         A message indicating access to the admin panel.
     """
 
-    return {"message": f"Welcome to the admin panel {claims['sub']}!"}
+    return {"message": f"Welcome to the admin panel: {claims['sub']}!"}
 
 
 @router.post("/", response_model=UserCreateWithRecoveryCodes)
