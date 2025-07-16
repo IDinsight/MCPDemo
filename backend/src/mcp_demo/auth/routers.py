@@ -105,8 +105,8 @@ from mcp_demo.auth.utils import (
     generate_refresh_token,
     get_cached_jwks,
     get_jwt_token,
+    get_least_privileged_scopes,
     rotate_refresh_token,
-    sanitize_scopes,
 )
 from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.utils import Oauth2ClientNotFoundError, verify_client
@@ -323,8 +323,8 @@ async def token_endpoint(
     2. Verify the client credentials against the database. If the credentials are
         invalid, record the failed login attempt.
     3. If the client is valid, reset the failed login attempts.
-    4. Retrieve the client's scopes from the database and sanitize the scopes to ensure
-        they are valid.
+    4. Get the least privileged scopes for the client based on the allowed scopes and
+        requested scopes.
     5. Get a JWT token using the client's scopes and the passphrase from settings.
     6. Generate a refresh token for the client, which can be used to obtain new access
         tokens without re-authenticating.
@@ -337,8 +337,8 @@ async def token_endpoint(
     2. Verify the user credentials against the database. If the credentials are
         invalid, record the failed login attempt.
     3. If the user is valid, reset the failed login attempts.
-    4. Retrieve the user's scopes from the database and sanitize the scopes to ensure
-        they are valid.
+    4. Get the least privileged scopes for the user based on their roles and
+        permissions.
     5. Get a JWT token using the user's scopes and the passphrase from settings.
     6. Generate a refresh token for the user, which can be used to obtain new access
         tokens without re-authenticating.
@@ -468,8 +468,12 @@ async def token_endpoint(
             )
 
             # 4.
-            client_scopes = client_db.scopes
-            requested_scopes = sanitize_scopes(requested_scopes=client_scopes)
+            allowed_scopes = client_db.scopes
+            requested_scopes = await get_least_privileged_scopes(
+                allowed_scopes=list(allowed_scopes),
+                requested_scopes=form.scopes,
+                sub=client_db.client_id,
+            )
 
             # 5.
             token = await get_jwt_token(
@@ -525,10 +529,14 @@ async def token_endpoint(
             )
 
             # 4.
-            user_scopes = await get_user_scopes_by_id(
+            allowed_scopes = await get_user_scopes_by_id(
                 asession=asession, user_id=user_db.user_id
             )
-            requested_scopes = sanitize_scopes(requested_scopes=list(user_scopes))
+            requested_scopes = await get_least_privileged_scopes(
+                allowed_scopes=list(allowed_scopes),
+                requested_scopes=form.scopes,
+                sub=user_db.user_id,
+            )
 
             # 5.
             access_token = await get_jwt_token(

@@ -173,7 +173,8 @@ class ClientCredentialsRequestForm:
             The password of the user for password grant type. Optional, only used for
             password grant.
         requested_scope
-            Space-separated list of scopes requested by the client.
+            Space-separated list of scopes requested by the client. This parameter
+            allows users/clients to "scope down".
         username
             The username of the user for password grant type. Optional, only used for
             password grant.
@@ -704,6 +705,47 @@ async def get_latest_private_key_and_kid(
         ),
         kid,
     )
+
+
+async def get_least_privileged_scopes(
+    *,
+    allowed_scopes: list[str],
+    requested_scopes: Optional[list[str]] = None,
+    sub: str | int,
+) -> list[str]:
+    """Get the least privileged scopes based on allowed and requested scopes. This
+    approach allows down scoping of permissions, ensuring that only the scopes
+    requested by the client or user that are also allowed by the server are returned.
+
+    Parameters
+    ----------
+    allowed_scopes
+        The list of scopes that the client or user is allowed to request.
+    requested_scopes
+        The list of scopes that the client or user is requesting. If not provided,
+        all allowed scopes are returned.
+    sub
+        The subject for which the scopes are being requested.
+
+    Returns
+    -------
+    list[str]
+        A list of scopes that are both requested and allowed, or all allowed scopes if
+        no requested scopes are provided.
+    """
+
+    requested = set(sanitize_scopes(requested_scopes=requested_scopes or []))
+    allowed = set(sanitize_scopes(requested_scopes=allowed_scopes))
+
+    invalid_scopes = requested - allowed
+    if invalid_scopes:
+        logger.warning(f"Subject '{sub}' requested disallowed scopes: {invalid_scopes}")
+
+    least_privileged_scopes = list(requested & allowed)
+    if not requested:
+        least_privileged_scopes = list(allowed)
+
+    return least_privileged_scopes
 
 
 def jwk_from_public_key(
