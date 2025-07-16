@@ -1,4 +1,82 @@
-"""This module contains FastAPI routers for authentication endpoints."""
+"""This module contains FastAPI routers for authentication endpoints.
+
+Notes:
+
+1. This authentication flow supports two OAuth2 grant types:
+    - Password Grant (grant_type=password): User-based login with username/password.
+    - Client Credentials Grant (grant_type=client_credentials): Machine-to-machine auth
+        using client ID/secret.
+
+   Both result in access tokens (JWTs), but the subject (sub) and claims differ:
+        - `sub` is a user ID in password grant.
+        - `sub` is a client ID in client_credentials grant.
+
+   In OAuth2, each token is associated with a set of scopes (e.g., read, write, admin).
+    These scopes are enforced by the authentication flow defined here. This is more
+    granular and secure than traditional Bearer auth, which typically has
+    all-or-nothing access. **However**, we also enforce scopes manually with the
+    `scopes` package for Password Grant.
+2. The authentication flow does NOT include Authorization-code + PKCE (Proof Key for
+    Code Exchange). We would implement PKCE if we plan on supporting:
+        - Single‑page web apps (React, Vue) that **can’t hide a client secret**
+        - Native mobile apps (iOS/Android)
+        - Any scenario where users log in through a browser pop‑up or redirect flow and
+            we want maximum phishing/interception protection.
+
+   Client‑credentials and password grants are fine for internal services and
+   first‑party apps. PKCE is in addition to (not instead of) client‑credentials and the
+   two serve different audiences.
+3. Access tokens are:
+    - Short-lived (e.g., 15 min)
+    - Passed around often (in headers or cookies)
+    - Stored in memory or in short-lived storage
+
+   Refresh tokens are:
+    - Long-lived (e.g., 30 days)
+    - Stored securely
+    - Only used at refresh endpoints, not sent with every request
+
+   If an access token is leaked, it only works for 15 minutes (or less). The refresh
+   token stays hidden and protected.
+
+   Without refresh tokens:
+    - Users/clients would need to re-login every 15 minutes.
+    - Users/clients would be forced to:
+        - Prompt for username/password (client ID/secret)
+        - Or silently re-authenticate if possible (which still breaks UX)
+
+   With refresh tokens:
+    - The browser or client can:
+    - Automatically call /token/refresh
+    - Get a new access token without user input
+    - End users never see interruptions
+
+   This separation means:
+    - APIs only need to verify access tokens.
+    - The refresh endpoint handles session lifecycle, with stricter rules (IP lockout,
+    rate limit, etc.).
+
+   Thus, refresh tokens exist to allow short-lived access tokens to remain secure while
+   keeping users authenticated for long periods, without repeatedly asking for
+   passwords. Users still need the access token every time, but the refresh token is
+   what keeps that access token renewable behind the scenes, without burdening the user.
+4. Key rotation happens server-side (not client) and users do not need to manually
+    generate new RSA passphrases. Clients do not need to rotate their own keys (unless
+    we want to add such a feature in the future).
+5. Clients should fetch the current JWKS periodically (or cache and re-fetch on
+    signature failure).
+6. The RSA passphrase is the single point of encryption for all private keys. Every new
+    RSA private key used for JWT signing is encrypted on disk with the same passphrase
+    (AUTH_RSA_PASSPHRASE). This protects the keys at rest---even if someone steals the
+    `.pem` files, they can't read them without the passphrase.
+7. If an attacker got access to the passphrase, then they could decrypt the `.pem`
+    files and forge JWTs by signing tokens offline, backdate tokens with valid
+    signatures, and bypass revocation systems using stateless tokens. Key rotation
+    prevents this by periodically changing the passphrase and deleting old keys beyond
+    `AUTH_ROTATION_KEEP_LAST_N` (so that older keys encrypted with the old passphrase
+    are eventually purged). This makes forward secrecy stronger---even if the old
+    passphrase leaks, those older keys are eventually deleted and cannot be used.
+"""
 
 # Standard Library
 import hashlib
@@ -73,13 +151,36 @@ limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)
 async def get_jwks() -> JSONResponse:
     """Serve the public JWKS for verifying JWT signatures.
 
-    - Issuers sign tokens with private keys; clients must fetch public keys via this
-        endpoint.
-    - In production, the endpoint must be served over HTTPS.
-    - JWKS is cached by clients and refreshed according to `Cache-Control` headers.
+    What Happens Here
+    -----------------
 
-    NB: This endpoint cannot be specified to individual subjects because it is meant to
-    be used for **public** JWKS fetches (e.g., FastMCP or other OAuth2 clients). In
+    1. Signing and token issuance
+        - The auth server signs **every** JWT with the current private key
+        (private_<kid>.pem).
+        - That key’s kid is placed in the JWT header.
+    2. Verification by clients/APIs
+        - Verifier extracts kid and downloads (or has cached) one JWKS document.
+        - Verifier chooses the JWK whose kid matches and checks the signature and also
+            validates iss, aud, exp, scope, etc.
+    3. Key rotation
+        - Ops (or a scheduled job) creates a new keypair.
+        - The public part is prepended to jwks.json; old key stays until all tokens
+            signed with it expire.
+        - Private files on disk now include private_<newKid>.pem (current) plus at
+            most N‑1 older ones (optional).
+        - Clients keep working: they’ll see the new JWK next time they refresh their
+            JWKS cache.
+    4. Multiple users or clients
+        - Each login issues a fresh access token (15 min) and refresh token (30 days).
+        - **Nothing** in jwks.json changes for those logins because the signing key
+            hasn’t changed---only the token payload.
+
+    With this setup, millions of users/clients can log in, tokens stay
+    user/client‑specific, and the public‑key infrastructure remains simple, secure, and
+    rotation‑friendly.
+
+    NB: This endpoint should not be specific to individual subjects because it is meant
+    to be used for **public** JWKS fetches (e.g., FastMCP or other OAuth2 clients). In
     other words, the `Settings.AUTH_JWKS_URI` must be a **fixed** URI for the
     authorization server at load time and, thus, there is no way for clients to inject
     things like `grant_type` or `sub` into the request. Although we could pass values
@@ -223,7 +324,7 @@ async def token_endpoint(
     3. If the client is valid, reset the failed login attempts.
     4. Retrieve the client's scopes from the database and sanitize the scopes to ensure
         they are valid.
-    5. Get a JWT token using the client's scopes.
+    5. Get a JWT token using the client's scopes and the passphrase from settings.
     6. Generate a refresh token for the client, which can be used to obtain new access
         tokens without re-authenticating.
     7. Create a `TokenResponse` containing the access token, its expiration time,
@@ -243,7 +344,8 @@ async def token_endpoint(
     7. Create a `TokenResponse` containing the access token, its expiration time,
         the refresh token, and its expiration time.
     8. Set the access token as an HTTP-only cookie in the response, which is not
-        accessible via JavaScript, enhancing security against XSS attacks.
+        accessible via JavaScript, enhancing security against XSS attacks (e.g., the
+        access token is dropped into an HTTP-only cookie).
 
     Note on HTTP-only cookie
     ------------------------
@@ -352,6 +454,7 @@ async def token_endpoint(
             # 5.
             token = await get_jwt_token(
                 grant_type=form.grant_type,
+                passphrase=AUTH_RSA_PASSPHRASE.get_secret_value(),
                 redis_client=redis_client,
                 scopes=requested_scopes,
                 sub=client_db.client_id,
@@ -408,7 +511,7 @@ async def token_endpoint(
             requested_scopes = sanitize_scopes(requested_scopes=list(user_scopes))
 
             # 5.
-            token = await get_jwt_token(
+            access_token = await get_jwt_token(
                 grant_type=form.grant_type,
                 passphrase=AUTH_RSA_PASSPHRASE.get_secret_value(),
                 redis_client=redis_client,
@@ -426,7 +529,7 @@ async def token_endpoint(
 
             # 7.
             token_response = TokenResponse(
-                access_token=token,
+                access_token=access_token,
                 expires_in=AUTH_TOKEN_TTL,
                 refresh_token=refresh_token,
                 refresh_token_expires_in=refresh_token_expires_in,
@@ -442,7 +545,7 @@ async def token_endpoint(
                 max_age=AUTH_TOKEN_TTL,
                 samesite="none" if secure else "strict",  # Cross-site for OAuth2
                 secure=secure,  # Ensure cookie is only sent over HTTPS
-                value=token,
+                value=access_token,
             )
 
             return response
@@ -461,11 +564,32 @@ async def token_endpoint(
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def refresh_token_endpoint(
     form: RefreshTokenRequestForm, request: Request
-) -> TokenResponse:
+) -> JSONResponse:
     """Rotate a refresh token to issue a new access token.
 
-    This endpoint allows clients to exchange a valid refresh token for a new access
-    token and a new refresh token. The old refresh token is revoked in the process.
+    This endpoint allows **clients** (not users) to exchange a valid refresh token for
+    a new access token and a new refresh token. The old refresh token is revoked in the
+    process.
+
+    The process is as follows:
+
+    1. The refresh token is validated and rotated, generating a new access token and
+         a new refresh token. If the `revoke_access` flag is set, the access token is
+        also revoked.
+    2. A `TokenResponse` is created containing the new access token, its expiration
+        time, the new refresh token, and its expiration time.
+    3. The access token is set as an HTTP-only cookie in the response, which is not
+        accessible via JavaScript, enhancing security against XSS attacks (e.g., the
+        access token is dropped into an HTTP-only cookie).
+
+    Note on HTTP-only cookie:
+
+    In the context of rotating refresh tokens, the access token is set as an HTTP-only
+    cookie to prevent JavaScript access to the token, mitigating XSS attacks. This
+    cookie is sent automatically with each request to the server, allowing the server
+    to authenticate the user without requiring the client to manually include the
+    access token in request headers. This is particularly useful for web applications
+    where the access token is used to authenticate requests made by the user's browser.
 
     Parameters
     ----------
@@ -477,11 +601,13 @@ async def refresh_token_endpoint(
 
     Returns
     -------
-    TokenResponse
-        A response containing the new access token, its expiration time, the new
-        refresh token, and its expiration time.
+    JSONResponse
+        A JSON response containing the new access token, its expiration time, the new
+        refresh token, and its expiration time. The access token is also set as an
+        HTTP-only cookie in the response.
     """
 
+    # 1.
     (
         access_token,
         new_refresh_token,
@@ -493,13 +619,27 @@ async def refresh_token_endpoint(
         revoke_access=form.revoke_access,
     )
 
-    return TokenResponse(
+    # 2.
+    token_response = TokenResponse(
         access_token=access_token,
         expires_in=access_token_expires_in,
         refresh_token=new_refresh_token,
         refresh_token_expires_in=refresh_token_expires_in,
         token_type="Bearer",
     )
+
+    # 3.
+    response = JSONResponse(content=token_response.model_dump())
+    secure = FASTAPI_ENV in ["dev", "prod"]  # Sent only over HTTPS
+    response.set_cookie(
+        httponly=True,  # Not visible to JS
+        key="access_token",
+        max_age=AUTH_TOKEN_TTL,
+        samesite="none" if secure else "strict",  # Cross-site for OAuth2
+        secure=secure,  # Ensure cookie is only sent over HTTPS
+        value=access_token,
+    )
+    return response
 
 
 @router.post(

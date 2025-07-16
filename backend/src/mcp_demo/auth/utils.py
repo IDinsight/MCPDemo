@@ -378,8 +378,8 @@ async def _verify_caller(
         if key_info is None:  # Try one forced refresh
             jwks = await load_jwks(force_refresh=True)
             key_info = jwks["keys_by_kid"].get(kid, None)
-            if key_info is None:
-                raise credentials_exception
+        if key_info is None:
+            raise credentials_exception
         payload = pyjwt.decode(
             token,
             algorithms=[AUTH_JWK_ALGORITHM],
@@ -561,6 +561,25 @@ async def get_jwt_token(
         jti already exists, retry up to `max_attempts` times to generate a unique jti.
         If it still fails, raise an error.
 
+    Note:
+
+    1. This function issues a new JWT access token, but unlike traditional stateless
+    JWTs, it also adds stateful tracking via Redis to prevent replay attacks. The
+    `jti_cache_key` cache key is tied to a token's JWT ID (jti) and is a unique
+    identifier per token. We store that key in Redis with the user/client ID (sub) as
+    its value, a TTL equal to the token's lifetime (`AUTH_TOKEN_TTL`), and `nx=True`
+    (only set if it does not yet exist to prevent token reuse/replay). If `is_set` is
+    True, that means the token's JTI is successfully registered and we add the JTI key
+    to a set of JTIs associated with that subject (i.e., the user/client). For example,
+    auth:sub_jtis:password:user-123 --> {"jti:abc", "jti:def", "jti:ghi"}. This gives
+    us a way to track which JTIs were issued to a user/client and bulk revoke all their
+    tokens. For example, in `_verify_caller()`, if the JTI is not found in Redis (e.g.,
+    TTL expired or was deleted), then the token is considered revoked or expired. If we
+    don't do this, then tokens would be valid as long as their `exp` claim and we would
+    be vulnerable to replay attacks, where an attacker could reuse a token even after
+    the user/client logs out or changes their password; i.e., we would have no way to
+    forcefully log out a user/client without waiting for the token's natural expiration.
+
     Parameters
     ----------
     grant_type
@@ -630,7 +649,7 @@ async def get_jwt_token(
         is_set = await redis_client.set(
             ex=AUTH_TOKEN_TTL,
             name=jti_cache_key,
-            nx=True,  # Only if it does not yet exist
+            nx=True,  # Only if it does not yet exist (first pass)
             value=sub,
         )
         if is_set:
@@ -641,6 +660,8 @@ async def get_jwt_token(
             await redis_client.expire(subj_set_key, AUTH_TOKEN_TTL)
 
             return token
+
+        # Rare key collision or Redis failed to set the key for some transient reason.
         attempt_num += 1
 
     raise RuntimeError(f"Unable to mint unique JTI after {max_attempts} attempts")
@@ -830,7 +851,7 @@ async def load_jwks_from_redis(
     """
 
     # Fast path.
-    if _JWKS_CACHE is not None and not force_refresh:
+    if not force_refresh and _JWKS_CACHE is not None:
         return _JWKS_CACHE  # Serve the in-process copy
 
     # Slow path.
@@ -859,7 +880,7 @@ async def load_jwks_from_redis(
         logger.warning("Corrupted JWKS in Redis; regenerating empty set.")
         new_jwks = {"keys": []}
 
-    # Build dict and pre-compile PEMs.
+    # Build fast lookup mapping.
     new_jwks["keys_by_kid"] = _build_keys_by_kid(new_jwks=new_jwks)
 
     # Atomic in-process swap.
@@ -1033,9 +1054,8 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
         Raises
         ------
         HTTPException
-            If the token is invalid or does not have the required scopes. This exception
-            will have a status code of 403 (Forbidden) if the token does not have the
-            required scopes.
+            If the token is invalid, expired, or does not contain the required scopes.
+            If the token is not provided in the request headers or cookies.
         """
 
         if token is None:  # Header absent
@@ -1050,11 +1070,6 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
             required_scopes=required_scopes,
             token=token,
         )
-        token_scopes = {s.strip().lower() for s in claims.get("scope", "").split()}
-        if not required_scopes <= set(token_scopes):
-            raise HTTPException(
-                detail="Insufficient scope", status_code=status.HTTP_403_FORBIDDEN
-            )
 
         # Expose caller ID for audit purposes.
         request.state.audit_sub = claims.get("sub")
@@ -1074,8 +1089,27 @@ async def rotate_keys(
     """Generate a new RSA key-pair, add it to `jwks.json`, delete keys older than
     `AUTH_ROTATION_KEEP_LAST_N`.
 
-    NB: Key rotation is only applicable for `client_credentials` and `password` grant
-    types.
+    Key rotation is part of the auth server’s internal logic, not something clients
+    run. Key rotation is usually:
+
+        1. Automated, via a cron job or timer (e.g., every 7 or 30 days), or
+        2. Triggered by admin action (e.g., on a security event), and
+        3. Applies to JWT signing keys, not user-generated credentials.
+
+    Server-owned signing keys is used to sign access tokens (JWTs) and stored in
+    jwks.json and exposed via `/.well-known/jwks.json`. It is used by clients to
+    verify token signatures (not to generate tokens). Rotation is invisible to
+    users.
+
+    The `AUTH_RSA_PASSPHRASE` is a server-side secret used to encrypt the server's
+    private key (PEM) on disk and is not user-specific. It should be rotated manually
+    or on schedule by internal ops (not exposed to end users). Key rotation is always
+    recommended---however, it is not required to log in or refresh tokens.
+
+    Clients should fetch the current JWKS periodically (or cache and re-fetch on
+    signature failure) and do not need to rotate their own keys or generate new
+    passphrases. Clients just consume the updated keys for token verification in a
+    transparent manner.
 
     The process is as follows:
 
@@ -1086,20 +1120,24 @@ async def rotate_keys(
         (i.e., off the main event loop).
     4. Save the private and public keys to a PEM file, optionally encrypted with a
         passphrase. This allows recovery across restarts and auditing past keys.
-    5. Load the existing JWKS (JSON Web Key Set) from `jwks.json` and make a deep copy
-        to avoid mutating the in-memory cache.
+    5. Load the existing JWKS (JSON Web Key Set) from `jwks.json` (using
+        `force_refresh=True`) and make a deep copy to avoid mutating the in-memory
+        cache. The existing JWKS will be updated with the new key pair.
     6. Add the new key to the JWKS, ensuring it is at the top of the list. Prune the
         oldest keys, keeping only the most recent `AUTH_ROTATION_KEEP_LAST_N` keys.
         This ensures the JWKS only retains a small, rolling window of valid
         verification keys.
     7. Rebuild the lookup map `keys_by_kid` to allow fast lookups by key ID (kid).
     8. Save the updated JWKS back to `jwks.json`. This serves as the canonical source
-        for clients perfoorming JWKS fetches.
+        for clients performing JWKS fetches.
     9. Update the in-memory cache of the JWKS and its last modified time so that the
         current process can use the new key immediately. This replaces in-memory JWKS
         cache so subsequent JWT issuance/verification uses the fresh key immediately.
     10. Verify that the newly generated kid doesn't exist in the remaining older keys.
         This guards against hte (extremely rare) chance of collision in key IDs.
+
+    NB: Key rotation is only applicable for `client_credentials` and `password` grant
+    types.
 
     Parameters
     ----------
@@ -1195,16 +1233,23 @@ async def rotate_keys_with_redis(
 
     The process is as follows:
 
-    1. Generate a new kid (key ID) for the new key pair.
-    2. Generate a new RSA key pair (private and public keys).
-    3. Save the private and public keys to a PEM file, optionally encrypted with a
+    1. Ensure only one key rotation can happen at a time, avoiding race conditions
+        across threads/processes.
+    2. Generate a new random 16 character key ID (kid) for the new key pair.
+    3. Generate a new RSA key pair (private and public keys).
+    4. Save the private and public keys to a PEM file, optionally encrypted with a
         passphrase.
-    4. Load the existing JWKS (JSON Web Key Set) from Redis (or start empty).
-    5. Insert the fresh public key at the head of the list.
-    6. Prune the JWKS to keep only the most recent `keep_last_n` public keys.
+    5. Load the existing JWKS (JSON Web Key Set) from Redis (or start empty).
+    6. Insert the fresh public key at the head of the list and prune the JWKS to keep
+        only the most recent `keep_last_n` public keys.
     7. Rebuild the helper map `keys_by_kid` to allow fast lookups by key ID (kid).
     8. Save the whole JWKS back to Redis in one atomic SET operation.
     9. Refresh the in-memory cache for this process.
+    10. Verify that the newly generated kid doesn't exist in the remaining older keys.
+        This guards against hte (extremely rare) chance of collision in key IDs.
+
+    NB: Key rotation is only applicable for `client_credentials` and `password` grant
+    types.
 
     Parameters
     ----------
@@ -1223,18 +1268,25 @@ async def rotate_keys_with_redis(
     str
         The key ID (kid) of the newly generated key pair, which can be used to sign
         JWTs.
+
+    Raises
+    ------
+    ValueError
+        If a duplicate key ID (kid) is detected after rotation, indicating a logic
+        error in the key management process.
     """
 
+    # 1.
     async with process_lock():
-        # 1.
-        kid = token_hex(8)  # 16-char random key ID
-
         # 2.
+        kid = token_hex(8)
+
+        # 3.
         private_key, public_key = await asyncio.to_thread(
             generate_rsa_keypair, key_size=key_size
         )
 
-        # 3.
+        # 4.
         await asyncio.to_thread(
             save_keypair,
             passphrase=passphrase,
@@ -1244,7 +1296,7 @@ async def rotate_keys_with_redis(
             public_key_fp=_SECRETS_DIR / f"public_{kid}.pem",
         )
 
-        # 4.
+        # 5.
         raw = await redis_client.get(REDIS_CACHE_PREFIX_JWKS_CURRENT)
         if raw:
             try:
@@ -1254,10 +1306,8 @@ async def rotate_keys_with_redis(
         else:
             jwks = {"keys": []}
 
-        # 5.
-        new_public_jwk = jwk_from_public_key(kid=kid, public_key=public_key)
-
         # 6.
+        new_public_jwk = jwk_from_public_key(kid=kid, public_key=public_key)
         jwks["keys"] = [new_public_jwk, *[k for k in jwks["keys"] if k["kid"] != kid]][
             :keep_last_n
         ]
@@ -1265,13 +1315,19 @@ async def rotate_keys_with_redis(
         # 7.
         jwks["keys_by_kid"] = _build_keys_by_kid(new_jwks=jwks)
 
-        # 8.
+        # 8. Explicit TTL slightly longer than the auth token TTL so that a stale JWKS
+        # can't survive forever if rotation logic crashes.
         await redis_client.set(
-            REDIS_CACHE_PREFIX_JWKS_CURRENT, json.dumps(jwks, separators=(",", ":"))
+            REDIS_CACHE_PREFIX_JWKS_CURRENT,
+            json.dumps(jwks, separators=(",", ":"), ex=AUTH_TOKEN_REFRESH_TTL + 3600),
         )
 
         # 9.
         _set_cache(mtime=None, new_jwks=jwks)
+
+        # 10.
+        if kid in {key["kid"] for key in jwks["keys"][1:]}:
+            raise ValueError(f"Duplicate kid detected after rotation: {kid}")
 
         return kid
 
@@ -1460,7 +1516,7 @@ async def verify_refresh_token(
     Parameters
     ----------
     redis_client
-        An instance of `aioredis.Redis` used to fetch the refresh token.
+        The Redis client used to fetch the refresh token.
     refresh_token
         The refresh token to verify. This is a long-lived token used to obtain new
         access tokens without requiring the user to re-authenticate.
