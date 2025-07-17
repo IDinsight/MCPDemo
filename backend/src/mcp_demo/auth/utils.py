@@ -1319,8 +1319,8 @@ async def rotate_keys(
 
         # 8.
         jwks_fp = _SECRETS_DIR / jwks_fn
-        mtime = jwks_fp.stat().st_mtime
         await asyncio.to_thread(save_jwks, jwks=jwks, jwks_fp=jwks_fp)
+        mtime = jwks_fp.stat().st_mtime
 
         # 9.
         _set_cache(mtime=mtime, new_jwks=jwks)

@@ -84,7 +84,7 @@ import hashlib
 from typing import Any
 
 # Third Party Library
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi_csrf_protect import CsrfProtect
@@ -396,7 +396,25 @@ async def token_endpoint(
 
     However, the password grant sets `access_token` as an HTTP‑only cookie (good for
     XSS) but without extra defences that cookie is still sent on cross‑site POST,
-    allowing CSRF attacks.
+    allowing CSRF attacks. Thus, we also add CSRF protection to the password grant as
+    follows:
+
+    1. User logs in or authenticates via /auth/token. This issues:
+        - Access token (in a cookie or response body)
+        - Refresh token (in body)
+        - CSRF token via X-CSRF-Token response header
+        - Signed CSRF cookie using `fastapi-csrf-token` to bind session
+
+    2. Frontend extracts the X-CSRF-Token from the response header. This must be
+        echoed in the request header as X-CSRF-Token for future protected
+        POST/PUT/DELETE requests.
+    3. Client calls protected endpoints (e.g., /token/rotate-refresh-token).
+        - The browser automatically include the CSRF cookie.
+        - The frontend must manually send the X-CSRF-Token header.
+        - FastAPI CSRF middleware verifies both and ensures that the CSRF token in
+            header matches the one signed in the cookie.
+    4. If the tokens match, then the request goes through. Otherwise, a 403
+        Forbidden or 422 with "Bad headers" or "CSRF failed" error is raised.
 
     Note on Swagger UI
     ------------------
@@ -599,7 +617,7 @@ async def token_endpoint(
             # Set Non-HTTP-only cookie for CSRF cookie.
             csrf_protect.set_csrf_cookie(signed_token, response)
 
-            # Set unsigned CSRF token in response headers for front-end SPA to use.
+            # Set unsigned CSRF token in response headers for front-end to use.
             response.headers["X-CSRF-Token"] = csrf_token
 
             return response
@@ -612,7 +630,7 @@ async def token_endpoint(
 
 @router.post(
     "/token/rotate-refresh-token",
-    response_model=JSONResponse,
+    response_class=JSONResponse,
     summary="Rotate refresh token",
 )
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
@@ -620,6 +638,7 @@ async def refresh_token_endpoint(
     form: RefreshTokenRequestForm,
     request: Request,
     csrf_protect: CsrfProtect = Depends(),
+    x_csrf_token: str = Header(..., alias="X-CSRF-Token"),  # pylint: disable=W0613
 ) -> JSONResponse:
     """Rotate a refresh token to issue a new access token.
 
@@ -630,7 +649,7 @@ async def refresh_token_endpoint(
     The process is as follows:
 
     1. The CSRF token is validated to ensure the request is legitimate and not a CSRF
-        attack.
+        attack (only for humans, not machines).
     2. The refresh token is validated and rotated, generating a new access token and
          a new refresh token. If the `revoke_access` flag is set, the access token is
         also revoked.
@@ -639,7 +658,9 @@ async def refresh_token_endpoint(
     4. The access token is set as an HTTP-only cookie in the response, which is not
         accessible via JavaScript, enhancing security against XSS attacks (e.g., the
         access token is dropped into an HTTP-only cookie).
-    5. Refresh the CSRF cookie for the next request cycle.
+    5. If the CSRF token is present in the request cookies, a new CSRF token is
+        generated and set in the response headers and cookies. This ensures that the
+        client can continue to use CSRF protection for subsequent requests.
 
     Note on HTTP-only cookie:
 
@@ -666,6 +687,10 @@ async def refresh_token_endpoint(
     csrf_protect
         The CSRF protection dependency. This is used to validate the CSRF token
         provided in the request header.
+    x_csrf_token
+        The CSRF token provided in the request header. This is used to validate the
+        CSRF token against the signed cookie. Needed for Swagger UI in order add an
+        extra header to the request.
 
     Returns
     -------
@@ -676,7 +701,8 @@ async def refresh_token_endpoint(
     """
 
     # 1.
-    await csrf_protect.validate_csrf(request)
+    if "fastapi-csrf-token" in request.cookies:
+        await csrf_protect.validate_csrf(request)
 
     # 2.
     (
@@ -696,6 +722,7 @@ async def refresh_token_endpoint(
         expires_in=access_token_expires_in,
         refresh_token=new_refresh_token,
         refresh_token_expires_in=refresh_token_expires_in,
+        scopes=[],  # Scopes are not changed, just rotated
         token_type="Bearer",
     )
 
@@ -712,8 +739,10 @@ async def refresh_token_endpoint(
     )
 
     # 5.
-    _, new_csrf_signed = csrf_protect.generate_csrf_tokens()
-    csrf_protect.set_csrf_cookie(new_csrf_signed, response)
+    if "fastapi-csrf-token" in request.cookies:
+        new_csrf_token, new_csrf_signed = csrf_protect.generate_csrf_tokens()
+        csrf_protect.set_csrf_cookie(new_csrf_signed, response)
+        response.headers["X-CSRF-Token"] = new_csrf_token
 
     return response
 
@@ -761,6 +790,7 @@ async def revoke_token(
     """
 
     redis_client = request.app.state.redis
+    revoked_by = claims["sub"]
 
     # Try access‑token path first.
     try:
@@ -769,7 +799,10 @@ async def revoke_token(
         if jti:
             await redis_client.delete(REDIS_CACHE_PREFIX_JTI.format(jti=jti))
             return RevokeTokenResponse(
-                revoked_by=claims["sub"], revoked_token=token, type="access_token"
+                revoked_by=revoked_by,
+                revoked_from=claims["sub"],
+                revoked_token=token,
+                type="access_token",
             )
     except JWTError:
         pass
@@ -781,5 +814,8 @@ async def revoke_token(
     )
 
     return RevokeTokenResponse(
-        revoked_by=claims["sub"], revoked_token=token, type="refresh_token"
+        revoked_by=revoked_by,
+        revoked_from=None,
+        revoked_token=token,
+        type="refresh_token",
     )

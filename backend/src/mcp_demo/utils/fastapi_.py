@@ -17,6 +17,7 @@ from fastapi_csrf_protect import CsrfProtect
 from fastapi_csrf_protect.exceptions import CsrfProtectError
 from loguru import logger
 from prometheus_client import CollectorRegistry, make_asgi_app, multiprocess
+from pydantic_settings import BaseSettings
 from redis import asyncio as aioredis
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -28,7 +29,6 @@ from mcp_demo import auth, clients, scopes, users
 from mcp_demo.config import Settings
 from mcp_demo.middlewares.fastapi_ import AuditMiddleware, SecurityHeadersMiddleware
 from mcp_demo.middlewares.prometheus_ import PrometheusMiddleware
-from mcp_demo.schemas import CSRFSettings
 from mcp_demo.utils.general import make_dir
 
 DOMAIN_NAME = os.getenv("DOMAIN_NAME", "")
@@ -37,6 +37,20 @@ SENTRY_DSN = Settings.SENTRY_DSN
 SENTRY_TRACES_SAMPLE_RATE = Settings.SENTRY_TRACES_SAMPLE_RATE
 
 limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)
+
+
+class CSRFSettings(BaseSettings):
+    """Pydantic model for Cross-Site Request Forgery (CSRF) settings.
+
+    NB: `strict` prevents the CSRF cookie from leaving the application domain in any
+    cross‑site navigation and helps to reduce the attack surface.
+    """
+
+    cookie_samesite: str = "strict"  # "lax" or "strict"
+    cookie_secure: bool = Settings.FASTAPI_ENV in {"dev", "prod"}
+    header_name: str = "X-CSRF-Token"  # Default
+    httponly: bool = False  # JS client applications must be able to read it
+    secret_key: str = Settings.CSRF_SECRET_KEY.get_secret_value()
 
 
 def create_fastapi_app() -> FastAPI:
