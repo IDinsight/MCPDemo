@@ -324,7 +324,19 @@ async def _verify_caller(
     required_scopes: Optional[set[str]] = None,
     token: Annotated[str, Depends(oauth_2_multi_scheme)],
 ) -> dict[str, Any]:
-    """Shared JWT verifier for **both** users and service-clients.
+    """Shared JWT verifier for **both** users and service-clients. This function uses
+    both the public JWK for cryptographic verification and Redis for replay defense.
+
+    Consuming the JWT:
+
+    1. Reads the header to grab kid.
+    2. Pulls the matching public JWK from the in‑memory `keys_by_kid` lookup mapping.
+    3. Verifies the RSA‑signature --> ensures token wasn’t forged.
+    4. Checks exp, nbf, aud, iss, etc.
+    5. Looks up jti in Redis to be sure the token hasn’t been revoked.
+    6. Confirms the required scopes are present.
+    7. Because the heavy cryptographic verification is done with the public key from
+        the JWK, it never needs the private key or a DB call.
 
     NB: The `jwt` library to use here is from `jose`, not the one from `PyJWT`.
 
@@ -450,7 +462,16 @@ async def generate_refresh_token(
 ) -> tuple[str, int]:
     """Create a long‑lived, one‑time refresh token and persist its hash. The refresh
     token is a long-lived token that can be used to obtain new access tokens without
-    requiring the user/client to re-authenticate.
+    requiring the user/client to re-authenticate. Refresh tokens are easier to revoke
+    and rotate and never verified offline.
+
+    Creating an opaque refresh token:
+
+    1. Not a JWT, therefore no header, no signature, no kid.
+    2. Never leaves the auth server except as an opaque string; thus, the server can
+        store arbitrary metadata next to its hash in Redis.
+    3. When the client later POSTs it to the token refresh endpoint, the server looks
+        up that hash and issues a brand‑new access and refresh‑token pair.
 
     NB: Do not include `jti` in refresh tokens! Refresh tokens are opaque---they are
     long, random, base64url-encoded strings that are not JWTs.
@@ -542,6 +563,8 @@ async def get_cached_jwks() -> dict[str, Any]:
 
 async def get_jwt_token(
     *,
+    additional_claims: Optional[dict[str, Any]] = None,
+    additional_headers: Optional[dict[str, Any]] = None,
     grant_type: str,
     jwks_fn: str = AUTH_JWKS_FN,
     passphrase: str | None = None,
@@ -549,7 +572,16 @@ async def get_jwt_token(
     scopes: list[str],
     sub: str,
 ) -> str:
-    """Generate a JWT token for the given subject and scopes.
+    """Generate a JWT token for the given subject and scopes. This token is deliever to
+    clients and proves identity and permissions.
+
+    Minting an access token (JWT):
+
+    1. The header ({"alg": "RS256", "kid": "b5eef5…", "typ": "JWT"}) tells a verifier
+        which JWK to pick (kid) and which algorithm was used.
+    2. The payload lists claims about the subject and validity window.
+    3. It is signed with the private key that matches the public JWK (from
+        `jwk_from_public_key()`), so any party that has that JWK can verify it offline.
 
     NB: We use RS256 for signing the JWT, which requires a private key. `kid` is used
     to identify the key in the JWKS (JSON Web Key Set) endpoint. The `iss` (issuer) and
@@ -589,6 +621,14 @@ async def get_jwt_token(
 
     Parameters
     ----------
+    additional_claims
+        Additional claims to include in the JWT payload. This allows for custom
+        information to be added to the token, such as roles or permissions that are not
+        part of the standard claims.
+    additional_headers
+        Additional headers to include in the JWT header. This can be used to add
+        custom metadata to the token, such as application-specific information or
+        additional security parameters.
     grant_type
         The OAuth2 grant type, (e.g., 'client_credentials', 'password',
         'refresh_token').
@@ -635,20 +675,24 @@ async def get_jwt_token(
         now = int(time.time())
         payload = {
             "aud": AUTH_AUDIENCE,
-            "exp": now + AUTH_TOKEN_TTL,
-            "iat": now,
+            "exp": now + AUTH_TOKEN_TTL,  # Expiration time
+            "iat": now,  # Issued at/not before
             "iss": AUTH_TOKEN_ISSUER,
-            "gty": grant_type,
-            "jti": jti,
+            "gty": grant_type,  # Grant type (e.g., client_credentials, password, etc.)
+            "jti": jti,  # Unique ID for replay defense
             "nbf": now - 30,
-            "scope": " ".join(scopes),
-            "sub": sub,
+            "scope": " ".join(scopes),  # Must be space separated
+            "sub": sub,  # Subject (user/client ID)
             "typ": "JWT",
+            **(additional_claims or {}),
         }
 
         # 4.
         token = pyjwt.encode(
-            algorithm="RS256", headers={"kid": kid}, key=private_key, payload=payload
+            algorithm=AUTH_JWK_ALGORITHM,
+            headers={"kid": kid, **(additional_headers or {})},
+            key=private_key,
+            payload=payload,
         )
 
         # 5.
@@ -757,16 +801,29 @@ async def get_least_privileged_scopes(
 def jwk_from_public_key(
     *,
     alg: str = AUTH_JWK_ALGORITHM,
+    key_ops: Optional[list[str]] = None,
     kid: str,
     public_key: rsa.RSAPublicKey,
     use: str = "sig",
 ) -> dict[str, Any]:
-    """Convert an RSA public key to a JWK payload suitable for a JWKS endpoint.
+    """Convert an RSA public key to a JWK payload suitable for a JWKS endpoint so that
+    any service can verify signatures without hitting the auth server.
+
+    The public key in JWK form:
+
+    1. Only exposes public material (n, e).
+    2. Structure is defined by the JWK spec (RFC 7517).
+    3. Gets written into jwks.json; every verifier caches or periodically re-fetches
+        this file to know which public keys are valid.
+    4. Never contains user information or time‑based claims.
 
     Parameters
     ----------
     alg
         The algorithm used for the key, typically "RS256" for RSA keys.
+    key_ops
+        Optional list of key operations (e.g., ["sign", "verify"]) that this key can
+        perform. If not provided, the key will not have any specific operations defined.
     kid
         The key ID for the JWK, used to identify the key in a JWKS.
     public_key
@@ -781,7 +838,7 @@ def jwk_from_public_key(
     """
 
     numbers = public_key.public_numbers()
-    return {
+    jwk_dict: dict[str, Any] = {
         "alg": alg,
         "e": b64url(data=numbers.e.to_bytes((numbers.e.bit_length() + 7) // 8, "big")),
         "kid": kid,
@@ -789,6 +846,9 @@ def jwk_from_public_key(
         "n": b64url(data=numbers.n.to_bytes((numbers.n.bit_length() + 7) // 8, "big")),
         "use": use,
     }
+    if isinstance(key_ops, list) and key_ops:
+        jwk_dict["key_ops"] = key_ops
+    return jwk_dict
 
 
 async def load_jwks(
