@@ -303,6 +303,11 @@ async def token_endpoint(
     successful authentication (whether machine or human) a short‑lived RS256 JWT is
     issued in addition to a refresh token.
 
+    NB: We cannot use the `require_scopes` dependency here because it requires a
+    Bearer token to be present in the request, which is not the case for this
+    endpoint. Instead, we handle the authentication and authorization logic manually
+    based on the provided credentials and form data.
+
     The process is as follows:
 
     For the "client_credentials" grant type:
@@ -668,6 +673,7 @@ async def refresh_token_endpoint(
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def revoke_token(
     request: Request,
+    claims: dict = require_scopes(required_scopes={"admin"}),  # pylint: disable=W0613
     token: str = Form(..., description="Access or refresh token to revoke"),
 ) -> RevokeTokenResponse:
     """Revoke a refresh or access token.
@@ -689,6 +695,9 @@ async def revoke_token(
     ----------
     request
         The FastAPI request object, used to access the Redis client.
+    claims
+        The claims of the authenticated caller, used to verify scopes and grant type.
+        This is required to ensure that only authorized users can revoke tokens.
     token
         The JWT token to revoke, which can be either an access token or a refresh token.
 

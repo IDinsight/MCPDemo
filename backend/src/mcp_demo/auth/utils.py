@@ -1062,6 +1062,9 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
 
     NB: We also expose the caller ID (sub) in the request state for audit purposes.
 
+    NB: This dependency is meant to protect resource endpoints, where the user/client
+    already has a bearer token.
+
     Parameters
     ----------
     required_scopes
