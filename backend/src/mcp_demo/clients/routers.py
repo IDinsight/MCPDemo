@@ -2,9 +2,6 @@
 machine-to-machine service clients.
 """
 
-# Standard Library
-from typing import Annotated
-
 # Third Party Library
 import sqlalchemy
 
@@ -15,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
 from mcp_demo.auth.utils import require_scopes
-from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.schemas import (
     OAuth2ClientCreate,
     OAuth2ClientDeleteResponse,
@@ -26,7 +22,6 @@ from mcp_demo.clients.utils import (
     check_if_client_exists,
     delete_client_from_db,
     get_client_by_id,
-    get_current_client,
     save_client_to_db,
 )
 from mcp_demo.config import Settings
@@ -130,10 +125,10 @@ async def register(
 @router.delete("/{client_id}", response_model=OAuth2ClientDeleteResponse)
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def delete_client(
-    calling_client_db: Annotated[Oauth2ClientDB, Depends(get_current_client)],
     client_id: str,
     request: Request,  # pylint: disable=W0613
     asession: AsyncSession = Depends(get_async_session),
+    claims: dict = require_scopes(required_scopes={"admin"}),
 ) -> OAuth2ClientDeleteResponse:
     """Delete client by ID from database.
 
@@ -147,15 +142,14 @@ async def delete_client(
 
     Parameters
     ----------
-    calling_client_db
-        The client database object of the authenticated client, used to verify
-        permissions.
     client_id
         The client ID to delete.
     request
         The FastAPI request object. This is needed for SlowAPI rate limiting.
     asession
         The SQLAlchemy async session to use for all database connections.
+    claims
+        The claims of the authenticated client, used to verify scopes.
 
     Returns
     -------
@@ -171,16 +165,6 @@ async def delete_client(
     """
 
     # 1.
-    if (
-        calling_client_db.client_id != client_id
-        and "admin" not in calling_client_db.scopes
-    ):
-        raise HTTPException(
-            detail=f"Client ID not found: {client_id}.",
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-
-    # 2.
     try:
         client_db = await get_client_by_id(asession=asession, client_id=client_id)
     except Oauth2ClientNotFoundError as exc:
@@ -197,4 +181,4 @@ async def delete_client(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         ) from e
 
-    return OAuth2ClientDeleteResponse(client_id=client_id)
+    return OAuth2ClientDeleteResponse(client_id=client_id, deleted_by=claims["sub"])

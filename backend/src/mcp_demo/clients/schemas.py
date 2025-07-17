@@ -30,6 +30,8 @@ class OAuth2ClientCreate(OAuth2Client):
 class OAuth2ClientDeleteResponse(OAuth2Client):
     """Pydantic model for OAuth2 client deletion response."""
 
+    deleted_by: str
+
 
 class OAuth2ClientResponse(BaseModel):
     """Pydantic model for OAuth2 client response."""

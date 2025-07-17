@@ -37,6 +37,7 @@ class RefreshTokenRequestForm(BaseModel):
 class RevokeTokenResponse(BaseModel):
     """Pydantic model for token revocation response."""
 
+    revoked_by: str
     revoked_token: str
     type: Literal["access_token", "refresh_token"]
 

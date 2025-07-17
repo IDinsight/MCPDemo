@@ -77,28 +77,27 @@ async def admin_panel(
 
 @router.post("/", response_model=UserCreateWithRecoveryCodes)
 async def add_new_user(
-    calling_user_db: Annotated[UserDB, Depends(get_current_user)],
     user: UserCreateWithPassword,
     asession: AsyncSession = Depends(get_async_session),
+    claims: dict = require_scopes(required_scopes={"admin"}),
 ) -> UserCreateWithRecoveryCodes:
     """Create a new user.
 
     The process is as follows:
 
-    1. Check if the authenticated user has permission to add a new user.
-    2. Check if the username already exists in the database.
-    3. Generate recovery codes for the new user.
-    4. Save the new user to the database with the generated recovery codes.
-    5. Add the 'read' scope to the scope database and assign it to the new user.
+    1. Check if the username already exists in the database.
+    2. Generate recovery codes for the new user.
+    3. Save the new user to the database with the generated recovery codes.
+    4. Add the 'read' scope to the scope database and assign it to the new user.
 
     Parameters
     ----------
-    calling_user_db
-        The user object associated with the user that is creating a new user.
     user
         The user object to create.
     asession
         The SQLAlchemy async session to use for all database connections.
+    claims
+        The claims of the authenticated user, used to verify scopes.
 
     Returns
     -------
@@ -113,36 +112,27 @@ async def add_new_user(
     """
 
     # 1.
-    calling_user_scopes = await get_user_scopes_by_id(
-        asession=asession, user_id=calling_user_db.user_id
-    )
-    if "admin" not in calling_user_scopes:
-        raise HTTPException(
-            detail="Insufficient permission to add new user.",
-            status_code=status.HTTP_403_FORBIDDEN,
-        )
-
-    # 2.
     if await check_if_user_exists(asession=asession, user=user):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Username already exists."
         )
 
-    # 3.
+    # 2.
     recovery_codes = generate_recovery_codes()
 
-    # 4.
+    # 3.
     user_db = await save_user_to_db(
         asession=asession, recovery_codes=recovery_codes, user=user
     )
 
-    # 5.
+    # 4.
     await add_scope_to_db(asession=asession, scope=ScopeCreate(name="read"))
     added_scopes = await add_scopes_to_user(
         asession=asession, scopes=["read"], user_db=user_db
     )
 
     return UserCreateWithRecoveryCodes(
+        created_by=int(claims["sub"]),
         recovery_codes=recovery_codes,
         scopes=added_scopes,
         user_id=user_db.user_id,
@@ -152,24 +142,23 @@ async def add_new_user(
 
 @router.post("/{user_id}/scope", response_model=ScopeResponse)
 async def add_user_scope(
-    calling_user_db: Annotated[UserDB, Depends(get_current_user)],
     scope_assign: ScopeAssign,
     user_id: int,
     asession: AsyncSession = Depends(get_async_session),
+    claims: dict = require_scopes(required_scopes={"admin"}),
 ) -> ScopeResponse:
     """Add scopes to a user.
 
     Parameters
     ----------
-    calling_user_db
-        The user who is making the request. This is used to check if the user has the
-        required scope to assign scopes.
     scope_assign
         The scopes to assign to the user.
     user_id
         The ID of the user to whom the scopes will be assigned.
     asession
         The SQLAlchemy async session to use for all database connections.
+    claims
+        The claims of the authenticated user, used to verify scopes.
 
     Returns
     -------
@@ -182,52 +171,43 @@ async def add_user_scope(
         If the calling user does not have the 'admin' scope.
     """
 
-    calling_user_scopes = await get_user_scopes_by_id(
-        asession=asession, user_id=calling_user_db.user_id
-    )
-    if "admin" not in calling_user_scopes:
-        raise HTTPException(
-            detail="Insufficient permission to assign scopes.",
-            status_code=status.HTTP_403_FORBIDDEN,
-        )
-
     user_db = await get_user_by_id(asession=asession, user_id=user_id)
 
     added_scopes = await add_scopes_to_user(
         asession=asession, scopes=scope_assign.scopes, user_db=user_db
     )
 
-    return ScopeResponse(scopes=added_scopes, user_id=user_db.user_id)
+    return ScopeResponse(
+        created_by=int(claims["sub"]), scopes=added_scopes, user_id=user_db.user_id
+    )
 
 
 @router.delete("/{user_id}/{scope_name}", response_model=ScopeResponse)
 async def delete_user_scope(
-    calling_user_db: Annotated[UserDB, Depends(get_current_user)],
     scope_name: str,
     user_id: int,
     asession: AsyncSession = Depends(get_async_session),
+    claims: dict = require_scopes(required_scopes={"admin"}),
 ) -> ScopeResponse:
     """Delete a scope from a user.
 
     The process is as follows:
 
-    1. Check if the authenticated user has permission to delete scopes.
-    2. Check if the scope exists in the database.
-    3. Check if the user exists in the database.
-    4. Delete the scope from the user.
-    5. If the scope is not assigned to the user, raise an error.
+    1. Check if the scope exists in the database.
+    2. Check if the user exists in the database.
+    3. Delete the scope from the user.
+    4. If the scope is not assigned to the user, raise an error.
 
     Parameters
     ----------
-    calling_user_db
-        The user who is making the request. This is used to check if the user has the
-        required scope to delete scopes.
     scope_name
         The name of the scope to delete from the user.
     user_id
         The ID of the user from whom the scope will be deleted.
     asession
         The SQLAlchemy async session to use for all database connections.
+    claims
+        The claims of the authenticated user, used to verify scopes.
 
     Returns
     -------
@@ -244,16 +224,6 @@ async def delete_user_scope(
     """
 
     # 1.
-    calling_user_scopes = await get_user_scopes_by_id(
-        asession=asession, user_id=calling_user_db.user_id
-    )
-    if "admin" not in calling_user_scopes:
-        raise HTTPException(
-            detail="Insufficient permission to delete scopes.",
-            status_code=status.HTTP_403_FORBIDDEN,
-        )
-
-    # 2.
     if not await check_if_scope_exists(
         asession=asession, scope=ScopeCreate(name=scope_name)
     ):
@@ -262,7 +232,7 @@ async def delete_user_scope(
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
-    # 3.
+    # 2.
     try:
         user_db = await get_user_by_id(asession=asession, user_id=user_id)
     except UserNotFoundError as exc:
@@ -271,12 +241,12 @@ async def delete_user_scope(
             status_code=status.HTTP_404_NOT_FOUND,
         ) from exc
 
-    # 4.
+    # 3.
     user_db = await delete_scope_from_user(
         asession=asession, scope_name=scope_name, user_id=user_db.user_id
     )
 
-    # 5.
+    # 4.
     if not user_db:
         raise HTTPException(
             detail=f"Scope '{scope_name}' not found for user ID {user_id}.",
@@ -284,7 +254,9 @@ async def delete_user_scope(
         )
 
     return ScopeResponse(
-        user_id=user_db.user_id, scopes=[s.name for s in user_db.scopes]
+        created_by=int(claims["sub"]),
+        scopes=[s.name for s in user_db.scopes],
+        user_id=user_db.user_id,
     )
 
 
@@ -343,6 +315,7 @@ async def register_first_user(
     )
 
     return UserCreateWithRecoveryCodes(
+        created_by=user_db.user_id,
         recovery_codes=recovery_codes,
         scopes=added_scopes,
         user_id=user_db.user_id,

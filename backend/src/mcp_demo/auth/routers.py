@@ -673,7 +673,7 @@ async def refresh_token_endpoint(
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def revoke_token(
     request: Request,
-    claims: dict = require_scopes(required_scopes={"admin"}),  # pylint: disable=W0613
+    claims: dict = require_scopes(required_scopes={"admin"}),
     token: str = Form(..., description="Access or refresh token to revoke"),
 ) -> RevokeTokenResponse:
     """Revoke a refresh or access token.
@@ -715,7 +715,9 @@ async def revoke_token(
         jti = claims.get("jti")
         if jti:
             await redis_client.delete(REDIS_CACHE_PREFIX_JTI.format(jti=jti))
-            return RevokeTokenResponse(revoked_token=token, type="access_token")
+            return RevokeTokenResponse(
+                revoked_by=claims["sub"], revoked_token=token, type="access_token"
+            )
     except JWTError:
         pass
 
@@ -725,4 +727,6 @@ async def revoke_token(
         REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(token_hash=token_hash)
     )
 
-    return RevokeTokenResponse(revoked_token=token, type="refresh_token")
+    return RevokeTokenResponse(
+        revoked_by=claims["sub"], revoked_token=token, type="refresh_token"
+    )

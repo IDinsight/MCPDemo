@@ -50,7 +50,9 @@ async def create_global_scope(
     """
 
     scope_db = await add_scope_to_db(asession=asession, scope=scope_create)
-    return ScopeResponse(scopes=[scope_db.name], user_id=claims["sub"])
+    return ScopeResponse(
+        created_by=int(claims["sub"]), scopes=[scope_db.name], user_id=claims["sub"]
+    )
 
 
 @router.delete(

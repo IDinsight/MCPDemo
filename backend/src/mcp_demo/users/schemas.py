@@ -33,6 +33,7 @@ class UserCreateWithRecoveryCodes(UserCreate):
     recovery.
     """
 
+    created_by: int
     recovery_codes: list[str]
     scopes: list[str] = ["read"]
 
