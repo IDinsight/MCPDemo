@@ -499,6 +499,10 @@ fastapi==0.115.14 \
     #   fastapi-sso
     #   litellm
     #   sentry-sdk
+fastapi-csrf-protect==1.0.3 \
+    --hash=sha256:01f908dd87ea75cd1dd2e9b423825d09c1c7184e1c175ee465b72bc2f2a0b926 \
+    --hash=sha256:e56f682ea26a4ce6827a618ffd95fb1e7d570c36cc90f9cfb2c038e8befff8ab
+    # via mcp-demo (pyproject.toml)
 fastapi-sso==0.16.0 \
     --hash=sha256:3a66a942474ef9756d3a9d8b945d55bd9faf99781facdb9b87a40b73d6d6b0c3 \
     --hash=sha256:f3941f986347566b7d3747c710cf474a907f581bfb6697ff3bb3e44eb76b438c
@@ -746,6 +750,10 @@ importlib-metadata==8.7.0 \
     # via
     #   litellm
     #   opentelemetry-api
+itsdangerous==2.2.0 \
+    --hash=sha256:c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef \
+    --hash=sha256:e0050c0b7da1eea53ffaf149c0cfbb5c6e2e2b69c4bef22c81fa6eb73e5f6173
+    # via fastapi-csrf-protect
 jinja2==3.1.6 \
     --hash=sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d \
     --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
@@ -1352,6 +1360,7 @@ pydantic==2.11.7 \
     # via
     #   mcp-demo (pyproject.toml)
     #   fastapi
+    #   fastapi-csrf-protect
     #   fastapi-sso
     #   fastmcp
     #   litellm
@@ -1477,6 +1486,7 @@ pydantic-settings==2.10.1 \
     --hash=sha256:a60952460b99cf661dc25c29c0ef171721f98bfcb52ef8d9ea4c943d7c8cc796
     # via
     #   mcp-demo (pyproject.toml)
+    #   fastapi-csrf-protect
     #   mcp
 pygments==2.19.2 \
     --hash=sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887 \
@@ -1933,6 +1943,7 @@ starlette==0.46.2 \
     --hash=sha256:7f7361f34eed179294600af672f565727419830b54b7b084efe44bb82d2fccd5
     # via
     #   fastapi
+    #   fastapi-csrf-protect
     #   mcp
 tenacity==9.1.2 \
     --hash=sha256:1169d376c297e7de388d18b4481760d478b0e99a777cad3a9c86e556f4b697cb \

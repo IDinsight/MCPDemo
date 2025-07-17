@@ -36,6 +36,11 @@ class BackendSettings(BaseSettings):
     # Chat
     CHAT_ENV: str = "dev"
 
+    # Cross-Site Request Forgery (CSRF)
+    CSRF_SECRET_KEY: SecretStr = Field(
+        ..., description="Secret key for CSRF protection."
+    )  # 32 bytes random
+
     # External MCP Server
     EXTERNAL_FASTMCP_HOST: str = "0.0.0.0"
     EXTERNAL_FASTMCP_MOUNT_PATH: str = "external"

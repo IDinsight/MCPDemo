@@ -87,6 +87,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi_csrf_protect import CsrfProtect
 from jose import JWTError, jwt
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -297,6 +298,7 @@ async def token_endpoint(
     request: Request,
     asession: AsyncSession = Depends(get_async_session),
     credentials: HTTPBasicCredentials = Depends(basic_auth),
+    csrf_protect: CsrfProtect = Depends(),
     form: ClientCredentialsRequestForm = Depends(),
 ) -> JSONResponse | TokenResponse:
     """Issue a Bearer token via OAuth2 Client-Credentials **or** Password grant. Upon
@@ -379,6 +381,23 @@ async def token_endpoint(
         2. Or use SameSite=Lax/Strict for cookies if it fits the flows,
         3. Or rely solely on Authorization header tokens instead of cookies.
 
+    Note on Cross-Site Request Forgery (CSRF)
+    -----------------------------------------
+
+    CSRF is a type of attack where a malicious site tricks a user (not client) into
+    making unintended requests to a different site where the user is authenticated.
+    This can happen if the user is logged into a site and then visits a malicious site
+    that sends requests to the authenticated site using the user's credentials (e.g.,
+    via cookies).
+
+    CSRF abuses the browser’s implicit credential sending (cookies, Basic auth,
+    client certs). The client‑credentials grant is safe because machines read the token
+    and put it in an Authorization header (i.e., machines don’t use cookies).
+
+    However, the password grant sets `access_token` as an HTTP‑only cookie (good for
+    XSS) but without extra defences that cookie is still sent on cross‑site POST,
+    allowing CSRF attacks.
+
     Note on Swagger UI
     ------------------
 
@@ -399,6 +418,9 @@ async def token_endpoint(
         the caller's identity if the grant type is "client_credentials". If the
         grant type is "password", this parameter is ignored and the username and
         password are taken from the form data.
+    csrf_protect
+        The CSRF protection dependency. This is used to generate and validate CSRF
+        tokens for the password grant type. It is not used for the client credentials.
     form
         Form data covering both client_credentials and password grants:
             - `grant_type`: one of "client_credentials" or "password"
@@ -560,16 +582,25 @@ async def token_endpoint(
             )
 
             # 8.
+            csrf_token, signed_token = csrf_protect.generate_csrf_tokens()
             response = JSONResponse(content=token_response.model_dump())
             secure = FASTAPI_ENV in ["dev", "prod"]  # Sent only over HTTPS
+
+            # Set HTTP-only cookie for access token.
             response.set_cookie(
                 httponly=True,  # Not visible to JS
                 key="access_token",
                 max_age=AUTH_TOKEN_TTL,
-                samesite="none" if secure else "strict",  # Cross-site for OAuth2
+                samesite="lax",
                 secure=secure,  # Ensure cookie is only sent over HTTPS
                 value=access_token,
             )
+
+            # Set Non-HTTP-only cookie for CSRF cookie.
+            csrf_protect.set_csrf_cookie(signed_token, response)
+
+            # Set unsigned CSRF token in response headers for front-end SPA to use.
+            response.headers["X-CSRF-Token"] = csrf_token
 
             return response
         case _:
@@ -581,12 +612,14 @@ async def token_endpoint(
 
 @router.post(
     "/token/rotate-refresh-token",
-    response_model=TokenResponse,
+    response_model=JSONResponse,
     summary="Rotate refresh token",
 )
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def refresh_token_endpoint(
-    form: RefreshTokenRequestForm, request: Request
+    form: RefreshTokenRequestForm,
+    request: Request,
+    csrf_protect: CsrfProtect = Depends(),
 ) -> JSONResponse:
     """Rotate a refresh token to issue a new access token.
 
@@ -596,14 +629,17 @@ async def refresh_token_endpoint(
 
     The process is as follows:
 
-    1. The refresh token is validated and rotated, generating a new access token and
+    1. The CSRF token is validated to ensure the request is legitimate and not a CSRF
+        attack.
+    2. The refresh token is validated and rotated, generating a new access token and
          a new refresh token. If the `revoke_access` flag is set, the access token is
         also revoked.
-    2. A `TokenResponse` is created containing the new access token, its expiration
+    3. A `TokenResponse` is created containing the new access token, its expiration
         time, the new refresh token, and its expiration time.
-    3. The access token is set as an HTTP-only cookie in the response, which is not
+    4. The access token is set as an HTTP-only cookie in the response, which is not
         accessible via JavaScript, enhancing security against XSS attacks (e.g., the
         access token is dropped into an HTTP-only cookie).
+    5. Refresh the CSRF cookie for the next request cycle.
 
     Note on HTTP-only cookie:
 
@@ -614,6 +650,12 @@ async def refresh_token_endpoint(
     access token in request headers. This is particularly useful for web applications
     where the access token is used to authenticate requests made by the user's browser.
 
+    Note on CSRF dependency:
+
+    The dependency automatically grabs the request, reads the signed cookie, compares
+    it with the header echoed from the front‑end application, and raises
+    `CsrfProtectError` on mismatch.
+
     Parameters
     ----------
     form
@@ -621,6 +663,9 @@ async def refresh_token_endpoint(
         access token.
     request
         The FastAPI request object.
+    csrf_protect
+        The CSRF protection dependency. This is used to validate the CSRF token
+        provided in the request header.
 
     Returns
     -------
@@ -631,6 +676,9 @@ async def refresh_token_endpoint(
     """
 
     # 1.
+    await csrf_protect.validate_csrf(request)
+
+    # 2.
     (
         access_token,
         new_refresh_token,
@@ -642,7 +690,7 @@ async def refresh_token_endpoint(
         revoke_access=form.revoke_access,
     )
 
-    # 2.
+    # 3.
     token_response = TokenResponse(
         access_token=access_token,
         expires_in=access_token_expires_in,
@@ -651,17 +699,22 @@ async def refresh_token_endpoint(
         token_type="Bearer",
     )
 
-    # 3.
+    # 4.
     response = JSONResponse(content=token_response.model_dump())
     secure = FASTAPI_ENV in ["dev", "prod"]  # Sent only over HTTPS
     response.set_cookie(
         httponly=True,  # Not visible to JS
         key="access_token",
         max_age=AUTH_TOKEN_TTL,
-        samesite="none" if secure else "strict",  # Cross-site for OAuth2
+        samesite="lax",  # Lax is sufficient once CSRF token is validated
         secure=secure,  # Ensure cookie is only sent over HTTPS
         value=access_token,
     )
+
+    # 5.
+    _, new_csrf_signed = csrf_protect.generate_csrf_tokens()
+    csrf_protect.set_csrf_cookie(new_csrf_signed, response)
+
     return response
 
 

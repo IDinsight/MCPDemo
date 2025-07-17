@@ -6,6 +6,25 @@ from typing import Any, Callable, Literal
 # Third Party Library
 from pydantic import BaseModel, ConfigDict, Field
 
+# Package Library
+from mcp_demo.config import Settings
+
+
+class CSRFSettings(BaseModel):
+    """Pydantic model for Cross-Site Request Forgery (CSRF) settings.
+
+    NB: `strict` prevents the CSRF cookie from leaving the application domain in any
+    cross‑site navigation and helps to reduce the attack surface.
+    """
+
+    cookie_httponly: bool = False  # JS client applications must be able to read it
+    cookie_samesite: str = "strict"  # "lax" or "strict"
+    cookie_secure: bool = Settings.FASTAPI_ENV in {"dev", "prod"}
+    header_name: str = "X-CSRF-Token"  # Default
+    secret_key: str = Settings.CSRF_SECRET_KEY.get_secret_value()
+
+    model_config = ConfigDict(from_attributes=True)
+
 
 class Limits(BaseModel):
     """Pydantic model for global limits."""

@@ -10,9 +10,11 @@ from typing import AsyncIterator, Callable
 # Third Party Library
 import sentry_sdk
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
+from fastapi_csrf_protect import CsrfProtect
+from fastapi_csrf_protect.exceptions import CsrfProtectError
 from loguru import logger
 from prometheus_client import CollectorRegistry, make_asgi_app, multiprocess
 from redis import asyncio as aioredis
@@ -26,6 +28,7 @@ from mcp_demo import auth, clients, scopes, users
 from mcp_demo.config import Settings
 from mcp_demo.middlewares.fastapi_ import AuditMiddleware, SecurityHeadersMiddleware
 from mcp_demo.middlewares.prometheus_ import PrometheusMiddleware
+from mcp_demo.schemas import CSRFSettings
 from mcp_demo.utils.general import make_dir
 
 DOMAIN_NAME = os.getenv("DOMAIN_NAME", "")
@@ -74,6 +77,7 @@ def create_fastapi_app() -> FastAPI:
 
     # 3.
     app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
+    app.add_exception_handler(CsrfProtectError, csrf_protect_exception_handler)
 
     # 4.
     origins = [
@@ -122,6 +126,66 @@ def create_metrics_app() -> Callable:
     registry = CollectorRegistry()
     multiprocess.MultiProcessCollector(registry)
     return make_asgi_app(registry=registry)
+
+
+async def csrf_protect_exception_handler(
+    request: Request, exc: Exception  # pylint: disable=W0613
+) -> JSONResponse:
+    """Handle CSRF protection exceptions.
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object.
+    exc
+        The CSRF protection exception that was raised.
+
+    Returns
+    -------
+    JSONResponse
+        The response to be returned, typically a JSON response with a 403 status code.
+    """
+
+    if isinstance(exc, CsrfProtectError):
+        return JSONResponse({"detail": exc.message}, status_code=exc.status_code)
+
+    # Fallback in the unlikely case a different exception sneaks through.
+    return JSONResponse(
+        {"detail": "Unhandled CSRF error"}, status_code=status.HTTP_400_BAD_REQUEST
+    )
+
+
+@CsrfProtect.load_config
+def get_csrf_config() -> CSRFSettings:
+    """Load CSRF configuration for the FastAPI application.
+
+    Notes
+    -----
+
+    `fastapi‑csrf‑protect` looks for exactly one function in the application that is
+    decorated with `@CsrfProtect.load_config`. The package will then call that function
+    once, at import time, to obtain the settings object that defines:
+        - The secret key used to create and validate CSRF tokens
+        - Cookie flags (secure, samesite, httponly, path, domain)
+        - The header name that the front‑end must echo (X‑CSRF‑Token by default)
+
+    When the application later does:
+        csrf = CsrfProtect(request) # In a route or dependency
+        csrf.validate_csrf(header_value)   # or csrf.generate_csrf()
+
+    the library already has those parameters cached because the decorator registered
+    `get_csrf_config()` as its configuration provider. In other words, the function is
+    never called directly by the application code; the decorator wires it into the
+    library’s internal singleton configuration so every middleware, dependency or route
+    that instantiates CsrfProtect can read the same settings.
+
+    Returns
+    -------
+    CSRFSettings
+        The CSRF settings for the FastAPI application.
+    """
+
+    return CSRFSettings()
 
 
 @asynccontextmanager
