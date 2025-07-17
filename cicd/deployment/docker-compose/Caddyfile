@@ -1,7 +1,7 @@
-{$DEV_CADDY_DOMAIN_NAME:localhost} {
+{$CADDY_DOMAIN_NAME}:{$CADDY_HTTPS_PORT} {
     # FastAPI
-    handle_path {$DEV_CADDY_BACKEND_ROOT_API:}/api/* {
-        reverse_proxy api:{$DEV_FASTAPI_PORT} {
+    handle_path {$CADDY_BACKEND_ROOT_API}/* {
+        reverse_proxy api:{$FASTAPI_PORT} {
 
             # Pass the real IP, drop client supplied values
             header_up  -X-Forwarded-For                # Strip incoming header
@@ -18,8 +18,8 @@
     }
 
     # FastMCP
-    handle_path {$DEV_CADDY_BACKEND_ROOT_MCP:}/mcp/* {
-        reverse_proxy mcp:{$DEV_FASTMCP_PORT} {
+    handle_path {$CADDY_BACKEND_ROOT_MCP}/* {
+        reverse_proxy mcp:{$FASTMCP_PORT} {
 
             # Same header hygiene
             header_up  -X-Forwarded-For

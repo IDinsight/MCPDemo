@@ -46,7 +46,7 @@ up-pgvector: ## Set up pg-vector container
 	@echo "$(GREEN)Starting a new pg-vector container...$(RESET)"
 	@docker run \
 		--name pg-vector-local \
-		--env-file "$(CURDIR)/backend/.env" \
+		--env-file "$(CURDIR)/.env" \
 		-p 5432:5432 \
 		-v pgvector_data:/var/lib/postgresql/data \
 		-d $(DOCKER_PG_VECTOR_IMAGE)
@@ -83,14 +83,14 @@ clean-docker: ## Remove every container, image, volume, network, build cache & h
 	-@docker stop $$(docker ps -q) 2>/dev/null || true
 	-@docker rm -f $$(docker ps -aq) 2>/dev/null || true
 	@echo "$(RED)Tearing down every docker-compose project...$(RESET)"
-	-@for p in $$(docker compose ls --format '{{.Name}}'); do \
+	-@docker compose ls | tail -n +2 | awk '{print $$1}' | while read -r p; do \
 		docker compose -p $$p down --rmi all --volumes --remove-orphans ; \
 	done
 	@echo "$(RED)Pruning dangling images, networks, and anonymous volumes...$(RESET)"
 	-@docker system prune -a --volumes -f
 	@echo "$(RED)Force deleting all named volumes...$(RESET)"
 	-@docker volume rm -f $$(docker volume ls -q) 2>/dev/null || true
-	@echo "$(RED)Cleaninng BuildKit layer caches for every builder...$(RESET)"
+	@echo "$(RED)Cleaning BuildKit layer caches for every builder...$(RESET)"
 	-@for b in $$(docker buildx ls --format '{{.Name}}'); do \
 		docker buildx prune -af --builder $$b ; \
 	done 2>/dev/null || true

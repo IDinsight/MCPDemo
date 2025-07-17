@@ -38,7 +38,12 @@ def get_access_token(*, auth_type: str = "bearer", password: str, username: str)
         If an unsupported authentication type is provided.
     """
 
+    # Local/dev server URL for token retrieval.
     url = "http://0.0.0.0:8000/auth/token"
+
+    # Prod (through Caddy).
+    # url = "https://api.example.com/api/auth/token"
+
     match auth_type:
         case "bearer":
             payload = {

@@ -609,7 +609,7 @@ async def token_endpoint(
                 httponly=True,  # Not visible to JS
                 key="access_token",
                 max_age=AUTH_TOKEN_TTL,
-                samesite="lax",
+                samesite="strict" if not secure else "none",
                 secure=secure,  # Ensure cookie is only sent over HTTPS
                 value=access_token,
             )

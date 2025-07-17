@@ -25,13 +25,13 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 # Package Library
-from mcp_demo import auth, clients, scopes, users
+from mcp_demo import admin, auth, clients, scopes, users
 from mcp_demo.config import Settings
 from mcp_demo.middlewares.fastapi_ import AuditMiddleware, SecurityHeadersMiddleware
 from mcp_demo.middlewares.prometheus_ import PrometheusMiddleware
 from mcp_demo.utils.general import make_dir
 
-DOMAIN_NAME = os.getenv("DOMAIN_NAME", "")
+CADDY_DOMAIN_NAME = os.getenv("CADDY_DOMAIN_NAME", "localhost")
 REDIS_URL = Settings.REDIS_URL
 SENTRY_DSN = Settings.SENTRY_DSN
 SENTRY_TRACES_SAMPLE_RATE = Settings.SENTRY_TRACES_SAMPLE_RATE
@@ -75,6 +75,7 @@ def create_fastapi_app() -> FastAPI:
         debug=True,
         lifespan=lifespan_fastapi,
         openapi_tags=[
+            admin.TAG_METADATA,
             auth.TAG_METADATA,
             clients.TAG_METADATA,
             scopes.TAG_METADATA,
@@ -84,6 +85,7 @@ def create_fastapi_app() -> FastAPI:
     )
 
     # 2.
+    app.include_router(admin.routers.router)
     app.include_router(auth.routers.router)
     app.include_router(clients.routers.router)
     app.include_router(scopes.routers.router)
@@ -95,9 +97,9 @@ def create_fastapi_app() -> FastAPI:
 
     # 4.
     origins = [
-        f"http://{DOMAIN_NAME}",
-        f"http://{DOMAIN_NAME}:3000",
-        f"https://{DOMAIN_NAME}",
+        f"http://{CADDY_DOMAIN_NAME}",
+        f"http://{CADDY_DOMAIN_NAME}:3000",
+        f"https://{CADDY_DOMAIN_NAME}",
     ]
     app.add_middleware(AuditMiddleware)
     app.add_middleware(

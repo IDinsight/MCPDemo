@@ -47,7 +47,7 @@ COPY --from=build /root/.local /root/.local
 
 # Copy installed site-packages and source code.
 COPY --from=build /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=build /usr/src /usr/src
+COPY --from=build /usr/backend /usr/backend
 
 # Set working directory.
 WORKDIR ${HOME_DIR}
@@ -58,4 +58,4 @@ EXPOSE 8100
 # Proxy-aware launch.
 # 1. --proxy-headers tells Starlette to trust X-Forwarded-* once validated.
 # 2. --forwarded-allow-ips=* narrows trust to in-cluster traffic only
-CMD ["uv", "run", "src/mcp_demo/entries/mcp_server_main.py", "--no-reload", "--proxy-headers", "--forwarded-allow-ips", "172.19.0.0/16,127.0.0.1,::1"]
+CMD ["uv", "run", "src/mcp_demo/entries/mcp_server_main.py", "--no-reload", "--proxy-headers", "--forwarded-allow-ips", ""172.16.0.0/12,127.0.0.1,::1""]

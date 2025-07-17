@@ -250,7 +250,6 @@ def get_bearer_auth_provider() -> BearerAuthProvider:
         jwks_uri=Settings.AUTH_JWKS_URI,
         required_scopes=[  # This dictates what scopes are required for the client
             "admin",
-            "read",
         ],
     )
 
