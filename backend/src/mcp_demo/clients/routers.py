@@ -36,7 +36,7 @@ REDIS_URL = Settings.REDIS_URL
 limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)
 
 
-@router.get("/admin-panel")
+@router.get("/admin-panel", summary="Admin panel")
 async def admin_panel(
     claims: dict = require_scopes(required_scopes={"admin"}),
 ) -> dict[str, str]:
@@ -122,7 +122,9 @@ async def register(
     )
 
 
-@router.delete("/{client_id}", response_model=OAuth2ClientDeleteResponse)
+@router.delete(
+    "/{client_id}", response_model=OAuth2ClientDeleteResponse, summary="Delete client"
+)
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def delete_client(
     client_id: str,

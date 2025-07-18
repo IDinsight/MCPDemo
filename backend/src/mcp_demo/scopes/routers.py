@@ -22,7 +22,7 @@ REDIS_URL = Settings.REDIS_URL
 limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)
 
 
-@router.post("/", response_model=ScopeResponse)
+@router.post("/", response_model=ScopeResponse, summary="Create a new global scope")
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def create_global_scope(
     request: Request,  # pylint: disable=W0613

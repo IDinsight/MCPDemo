@@ -52,7 +52,7 @@ REDIS_URL = Settings.REDIS_URL
 limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)
 
 
-@router.get("/admin-panel")
+@router.get("/admin-panel", summary="Admin panel")
 async def admin_panel(
     claims: dict = require_scopes(required_scopes={"admin"}),
 ) -> dict[str, str]:
@@ -75,7 +75,9 @@ async def admin_panel(
     return {"message": "Welcome to the admin panel!", "user_id": claims["sub"]}
 
 
-@router.post("/", response_model=UserCreateWithRecoveryCodes)
+@router.post(
+    "/", response_model=UserCreateWithRecoveryCodes, summary="Create a new user"
+)
 async def add_new_user(
     user: UserCreateWithPassword,
     asession: AsyncSession = Depends(get_async_session),
@@ -140,7 +142,9 @@ async def add_new_user(
     )
 
 
-@router.post("/{user_id}/scope", response_model=ScopeResponse)
+@router.post(
+    "/{user_id}/scope", response_model=ScopeResponse, summary="Add scope to user"
+)
 async def add_user_scope(
     scope_assign: ScopeAssign,
     user_id: int,
@@ -182,7 +186,9 @@ async def add_user_scope(
     )
 
 
-@router.delete("/{user_id}/{scope_name}", response_model=ScopeResponse)
+@router.delete(
+    "/{user_id}/{scope_name}", response_model=ScopeResponse, summary="Delete user scope"
+)
 async def delete_user_scope(
     scope_name: str,
     user_id: int,
@@ -260,7 +266,11 @@ async def delete_user_scope(
     )
 
 
-@router.post("/register-first-user", response_model=UserCreateWithRecoveryCodes)
+@router.post(
+    "/register-first-user",
+    response_model=UserCreateWithRecoveryCodes,
+    summary="Register first user",
+)
 async def register_first_user(
     user: UserCreateWithPassword,
     asession: AsyncSession = Depends(get_async_session),
@@ -323,7 +333,7 @@ async def register_first_user(
     )
 
 
-@router.get("/{user_id}", response_model=UserRetrieve)
+@router.get("/{user_id}", response_model=UserRetrieve, summary="Get user details")
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def get_user(
     calling_user_db: Annotated[UserDB, Depends(get_current_user)],
@@ -388,7 +398,7 @@ async def get_user(
     )
 
 
-@router.delete("/{user_id}", response_model=UserDeleteResponse)
+@router.delete("/{user_id}", response_model=UserDeleteResponse, summary="Delete user")
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def delete_user(
     calling_user_db: Annotated[UserDB, Depends(get_current_user)],
@@ -474,7 +484,9 @@ async def delete_user(
     return UserDeleteResponse(user_id=user_id, username=user_db.username)
 
 
-@router.put("/reset-password", response_model=UserRetrieve)
+@router.put(
+    "/reset-password", response_model=UserRetrieve, summary="Reset user password"
+)
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def reset_password(
     request: Request,  # pylint: disable=W0613

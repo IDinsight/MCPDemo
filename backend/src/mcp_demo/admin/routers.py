@@ -11,7 +11,7 @@ TAG_METADATA = {
 router = APIRouter(prefix="/admin", tags=[TAG_METADATA["name"]])
 
 
-@router.get("/health")
+@router.get("/health", summary="Application healthcheck")
 async def healthcheck() -> JSONResponse:
     """Healthcheck endpoint that checks connection to the database.
 

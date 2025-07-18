@@ -196,7 +196,9 @@ async def get_jwks() -> JSONResponse:
     return JSONResponse({"keys": jwks["keys"]})  # Exclude internal metadata
 
 
-@router.post("/introspect", response_model=IntrospectionResponse)
+@router.post(
+    "/introspect", response_model=IntrospectionResponse, summary="Introspect tokens"
+)
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def introspect_token(
     request: Request,
