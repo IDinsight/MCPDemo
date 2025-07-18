@@ -151,6 +151,18 @@ class SecureHeadersMiddleware(BaseHTTPMiddleware):
             .img_src("'self'")
         )
 
+        # For documentation endpoints, use a more relaxed CSP to allow inline scripts
+        # and styles, which are often used in Swagger UI and ReDoc.
+        csp_docs = (
+            secure.ContentSecurityPolicy()
+            .default_src("'self'")
+            # Swagger UI needs its own JS/CSS from the CDN plus inline/eval
+            .script_src("'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net")
+            .style_src("'self' 'unsafe-inline' https://cdn.jsdelivr.net")
+            # favicon hosted by Tiangolo’s site, logos encoded as data: URIs
+            .img_src("'self' data: https://fastapi.tiangolo.com")
+        )
+
         # Configure HSTS (HTTP Strict Transport Security) with a 2-year max age,
         hsts = (
             secure.StrictTransportSecurity()
@@ -159,13 +171,19 @@ class SecureHeadersMiddleware(BaseHTTPMiddleware):
             .preload()
         )
 
-        # Store secure headers configuration in the middleware instance.
         self.secure_headers = secure.Secure(
             csp=csp,
             hsts=hsts,
             permissions=secure.PermissionsPolicy(),
             referrer=secure.ReferrerPolicy().same_origin(),
             server=secure.Server().set("Secure"),
+            xcto=secure.XContentTypeOptions().nosniff(),
+            xfo=secure.XFrameOptions().deny(),
+        )
+        self.secure_headers_docs = secure.Secure(
+            csp=csp_docs,
+            hsts=hsts,
+            referrer=secure.ReferrerPolicy().same_origin(),
             xcto=secure.XContentTypeOptions().nosniff(),
             xfo=secure.XFrameOptions().deny(),
         )
@@ -197,6 +215,13 @@ class SecureHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
 
         # Patch the outgoing response in-place.
-        await self.secure_headers.set_headers_async(response)  # type: ignore
+        if request.url.path.startswith(("/docs", "/redoc", "/openapi.json", "/static")):
+            await self.secure_headers_docs.set_headers_async(
+                response  # type: ignore[arg-type]
+            )
+        else:
+            await self.secure_headers.set_headers_async(
+                response  # type: ignore[arg-type]
+            )
 
         return response
