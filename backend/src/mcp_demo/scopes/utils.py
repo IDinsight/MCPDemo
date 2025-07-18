@@ -1,9 +1,13 @@
 """This module contains utilities for scopes."""
 
+# Standard Library
+from typing import Sequence
+
 # Third Party Library
 from fastapi import HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 # Package Library
 from mcp_demo.config import Settings
@@ -122,3 +126,26 @@ async def delete_scope_from_db(
     await asession.flush()
 
     return True, True
+
+
+async def get_all_scopes_with_users(*, asession: AsyncSession) -> Sequence[ScopeDB]:
+    """Retrieve all scopes and their associated user IDs.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+
+    Returns
+    -------
+    Sequence[ScopeDB]
+        A sequence of `ScopeDB` objects, each containing the scope name and a list of
+        associated user IDs.
+    """
+
+    result = await asession.execute(
+        select(ScopeDB).options(selectinload(ScopeDB.users))
+    )
+    scope_dbs = result.scalars().all()
+
+    return scope_dbs

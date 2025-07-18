@@ -9,8 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Package Library
 from mcp_demo.auth.utils import require_scopes
 from mcp_demo.config import Settings
-from mcp_demo.scopes.schemas import ScopeCreate, ScopeDeleteResponse, ScopeResponse
-from mcp_demo.scopes.utils import add_scope_to_db, delete_scope_from_db
+from mcp_demo.scopes.schemas import (
+    ScopeCreate,
+    ScopeDeleteResponse,
+    ScopeResponse,
+    ScopeUserResponse,
+)
+from mcp_demo.scopes.utils import (
+    add_scope_to_db,
+    delete_scope_from_db,
+    get_all_scopes_with_users,
+)
 from mcp_demo.utils.database import get_async_session
 
 TAG_METADATA = {"description": "Manages scopes", "name": "Scope"}
@@ -53,6 +62,42 @@ async def create_global_scope(
     return ScopeResponse(
         created_by=int(claims["sub"]), scopes=[scope_db.name], user_id=claims["sub"]
     )
+
+
+@router.get(
+    "/", response_model=list[ScopeUserResponse], summary="Get scope-user ID mapping"
+)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
+async def get_scope_user_mapping(
+    request: Request,  # pylint: disable=W0613
+    asession: AsyncSession = Depends(get_async_session),
+    claims: dict = require_scopes(required_scopes={"admin"}),  # pylint: disable=W0613
+) -> list[ScopeUserResponse]:
+    """Retrieve all scopes and their associated user IDs.
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object. This is needed for SlowAPI rate limiting.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    claims
+        The claims of the authenticated user, used to verify scopes.
+
+    Returns
+    -------
+    list[ScopeUserResponse]
+        A list of scopes with their associated user IDs.
+    """
+
+    scope_dbs = await get_all_scopes_with_users(asession=asession)
+
+    return [
+        ScopeUserResponse(
+            scope_name=scope_db.name, user_ids=[user.user_id for user in scope_db.users]
+        )
+        for scope_db in scope_dbs
+    ]
 
 
 @router.delete(

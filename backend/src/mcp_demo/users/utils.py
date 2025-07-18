@@ -417,8 +417,7 @@ async def reset_user_password(
     user: UserResetPassword,
     user_db: UserDB,
 ) -> UserDB:
-    """Hash the new password, optionally regenerate recovery codes, and persist the
-    changes **on the existing row**.
+    """Hash the new password and persist the changes.
 
     Parameters
     ----------

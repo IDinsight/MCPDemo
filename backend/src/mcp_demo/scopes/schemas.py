@@ -37,3 +37,12 @@ class ScopeResponse(ScopeAssign):
 
     created_by: int
     user_id: int
+
+
+class ScopeUserResponse(BaseModel):
+    """Pydantic model for the response of scope-user mapping."""
+
+    scope_name: str
+    user_ids: list[int]
+
+    model_config = ConfigDict(from_attributes=True)

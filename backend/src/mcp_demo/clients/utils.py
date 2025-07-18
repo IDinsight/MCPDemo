@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Package Library
 from mcp_demo.auth.utils import _verify_caller, oauth_2_multi_scheme
 from mcp_demo.clients.models import Oauth2ClientDB
-from mcp_demo.clients.schemas import OAuth2ClientCreate
+from mcp_demo.clients.schemas import OAuth2ClientCreate, OAuth2ClientResetSecret
 from mcp_demo.config import Settings
 from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.general import generate_hash, verify_hash
@@ -74,7 +74,7 @@ class Oauth2ClientNotFoundError(Exception):
 
 
 async def check_if_client_exists(
-    *, asession: AsyncSession, client: OAuth2ClientCreate
+    *, asession: AsyncSession, client: OAuth2ClientCreate | OAuth2ClientResetSecret
 ) -> Oauth2ClientDB | None:
     """Check if a client exists in the database.
 
@@ -226,6 +226,37 @@ async def get_current_client(
             detail="Could not validate credentials",
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
+
+    return client_db
+
+
+async def reset_client_secret(
+    *,
+    asession: AsyncSession,
+    client: OAuth2ClientResetSecret,
+    client_db: Oauth2ClientDB,
+) -> Oauth2ClientDB:
+    """Hash the new secret and persist the changes.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    client
+        The client object containing the new secret to reset.
+    client_db
+        The existing client object from the database to update.
+
+    Returns
+    -------
+    Oauth2ClientDB
+        The updated client object saved in the database.
+    """
+
+    client_db.secret_hash = generate_hash(text=client.client_secret)
+
+    await asession.commit()
+    await asession.refresh(client_db)
 
     return client_db
 

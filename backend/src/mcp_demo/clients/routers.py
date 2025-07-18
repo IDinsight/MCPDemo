@@ -2,6 +2,9 @@
 machine-to-machine service clients.
 """
 
+# Standard Library
+from typing import Annotated
+
 # Third Party Library
 import sqlalchemy
 
@@ -12,16 +15,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
 from mcp_demo.auth.utils import require_scopes
+from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.schemas import (
     OAuth2ClientCreate,
     OAuth2ClientDeleteResponse,
+    OAuth2ClientResetSecret,
     OAuth2ClientResponse,
 )
 from mcp_demo.clients.utils import (
     Oauth2ClientNotFoundError,
     check_if_client_exists,
+    check_if_clients_exist,
     delete_client_from_db,
     get_client_by_id,
+    get_current_client,
+    reset_client_secret,
     save_client_to_db,
 )
 from mcp_demo.config import Settings
@@ -43,8 +51,8 @@ async def admin_panel(
     """Admin panel view for clients with admin scope.
 
     This endpoint is protected and can only be accessed by clients with the 'admin'
-    scope. It returns a simple message indicating that the user has access to the admin
-    panel.
+    scope. It returns a simple message indicating that the client has access to the
+    admin panel.
 
     Parameters
     ----------
@@ -61,19 +69,17 @@ async def admin_panel(
 
 
 @router.post(
-    "/register",
+    "/",
     response_model=OAuth2ClientResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a machine-to-machine service client",
+    summary="Create a new client",
 )
-@limiter.limit(RATE_LIMIT_LOGIN_RATE)
-async def register(
+async def add_new_client(
     oauth2_client: OAuth2ClientCreate,
-    request: Request,  # pylint: disable=W0613
     asession: AsyncSession = Depends(get_async_session),
+    claims: dict = require_scopes(required_scopes={"admin"}),
 ) -> OAuth2ClientResponse:
-    """Create a new service client with a hashed secret for secure service-to-service
-    auth.
+    """Create a new client with a hashed secret for secure machine-to-machine auth.
 
     This endpoint is intended for administrative use to provision new service clients.
     Each client is stored with a hashed `secret` and associated scopes.
@@ -90,10 +96,10 @@ async def register(
     oauth2_client
         The OAuth2 client object to create, containing `client_id`, `secret`, `scopes`,
         and `is_active`.
-    request
-        The FastAPI request object. This is needed for SlowAPI rate limiting.
     asession
         The SQLAlchemy async session to use for all database connections.
+    claims
+        The claims of the authenticated client, used to verify scopes.
 
     Returns
     -------
@@ -103,7 +109,7 @@ async def register(
     Raises
     ------
     HTTPException
-        If `client_id` already exists in the database.
+        If client ID already exists in the database.
     """
 
     # 1.
@@ -116,9 +122,132 @@ async def register(
     client_db = await save_client_to_db(asession=asession, client=oauth2_client)
 
     return OAuth2ClientResponse(
+        created_by=claims["sub"],
+        created_datetime_utc=client_db.created_datetime_utc,
         client_id=client_db.client_id,
         is_active=client_db.is_active,
         scopes=client_db.scopes,
+        updated_datetime_utc=client_db.updated_datetime_utc,
+    )
+
+
+@router.post(
+    "/register-first-client",
+    response_model=OAuth2ClientResponse,
+    summary="Register first client",
+)
+async def register_first_client(
+    oauth2_client: OAuth2ClientCreate,
+    asession: AsyncSession = Depends(get_async_session),
+) -> OAuth2ClientResponse:
+    """Register the first client.
+
+    The process is as follows:
+
+    1. Check if any clients already exist in the database. If so, raise an error.
+    2. Save the first client to the database.
+
+    Parameters
+    ----------
+    oauth2_client
+        The OAuth2 client object to create, containing `client_id`, `secret`, `scopes`,
+        and `is_active`.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+
+    Returns
+    -------
+    UserCreateWithRecoveryCodes
+        The user object with the recovery codes.
+
+    Raises
+    ------
+    HTTPException
+        If the username already exists.
+        If the authenticated user does not have permission to create users.
+    """
+
+    # 1.
+    if await check_if_clients_exist(asession=asession):
+        raise HTTPException(
+            detail="Clients already exist. Cannot register the first client again.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # 2.
+    client_db = await save_client_to_db(asession=asession, client=oauth2_client)
+
+    return OAuth2ClientResponse(
+        client_id=client_db.client_id,
+        created_by=client_db.client_id,
+        created_datetime_utc=client_db.created_datetime_utc,
+        is_active=client_db.is_active,
+        scopes=client_db.scopes,
+        updated_datetime_utc=client_db.updated_datetime_utc,
+    )
+
+
+@router.get(
+    "/{client_id}", response_model=OAuth2ClientResponse, summary="Get client details"
+)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
+async def get_user(
+    calling_client_db: Annotated[Oauth2ClientDB, Depends(get_current_client)],
+    request: Request,  # pylint: disable=W0613
+    client_id: str,
+    asession: AsyncSession = Depends(get_async_session),
+) -> OAuth2ClientResponse:
+    """Return a client profile iff the caller is the same `sub` *or* carries the `admin`
+    scope.
+
+    Parameters
+    ----------
+    calling_client_db
+        The client database object of the authenticated client, used to verify
+        permissions.
+    request
+        The FastAPI request object. This is needed for SlowAPI rate limiting.
+    client_id
+        The client ID to retrieve.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+
+    Returns
+    -------
+    OAuth2ClientResponse
+        The persisted client with `client_id`, `scopes`, and `is_active` fields.
+
+    Raises
+    ------
+    HTTPException
+        If the authenticated client does not have permission to view the client profile.
+        If the client ID does not exist in the database.
+    """
+
+    if calling_client_db.client_id != client_id:
+        caller_scopes = calling_client_db.scopes
+        if "admin" not in caller_scopes:
+            raise HTTPException(
+                detail=f"Client ID not found: {client_id}.",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+    try:
+        target_client_db = await get_client_by_id(
+            asession=asession, client_id=client_id
+        )
+    except Oauth2ClientNotFoundError as exc:
+        raise HTTPException(
+            detail=f"Client ID not found: {client_id}.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        ) from exc
+
+    return OAuth2ClientResponse(
+        client_id=target_client_db.client_id,
+        created_datetime_utc=target_client_db.created_datetime_utc,
+        is_active=target_client_db.is_active,
+        scopes=target_client_db.scopes,
+        updated_datetime_utc=target_client_db.updated_datetime_utc,
     )
 
 
@@ -184,3 +313,59 @@ async def delete_client(
         ) from e
 
     return OAuth2ClientDeleteResponse(client_id=client_id, deleted_by=claims["sub"])
+
+
+@router.put(
+    "/reset-secret", response_model=OAuth2ClientResponse, summary="Reset client secret"
+)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
+async def reset_secret(
+    request: Request,  # pylint: disable=W0613
+    client: OAuth2ClientResetSecret,
+    asession: AsyncSession = Depends(get_async_session),
+) -> OAuth2ClientResponse:
+    """Reset client secre.
+
+    NB: When this endpoint is called, the assumption is that the calling client is the
+    client that is requesting to reset their own secret. This is because a client's
+    secret is universal and belongs to the client. Thus, only a client can reset their
+    own secret.
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object. This is needed for SlowAPI rate limiting.
+    client
+        The OAuth2 client object containing the `client_id` and the new `secret`.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+
+    Returns
+    -------
+    OAuth2ClientResponse
+        The updated client with the new secret, `client_id`, `scopes`, and `is_active`
+        fields.
+
+    Raises
+    ------
+    HTTPException
+        If the client does not exist in the database.
+    """
+
+    client_to_update = await check_if_client_exists(asession=asession, client=client)
+
+    if client_to_update is None:
+        raise HTTPException(
+            detail="Client not found.", status_code=status.HTTP_404_NOT_FOUND
+        )
+
+    updated_client_db = await reset_client_secret(
+        asession=asession, client=client, client_db=client_to_update
+    )
+    return OAuth2ClientResponse(
+        client_id=updated_client_db.client_id,
+        created_datetime_utc=updated_client_db.created_datetime_utc,
+        is_active=updated_client_db.is_active,
+        scopes=updated_client_db.scopes,
+        updated_datetime_utc=updated_client_db.updated_datetime_utc,
+    )

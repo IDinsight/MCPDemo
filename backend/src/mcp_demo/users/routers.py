@@ -76,7 +76,10 @@ async def admin_panel(
 
 
 @router.post(
-    "/", response_model=UserCreateWithRecoveryCodes, summary="Create a new user"
+    "/",
+    response_model=UserCreateWithRecoveryCodes,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new user",
 )
 async def add_new_user(
     user: UserCreateWithPassword,
@@ -109,14 +112,13 @@ async def add_new_user(
     Raises
     ------
     HTTPException
-        If the authenticated user does not have permission to add a new user.
         If the username already exists.
     """
 
     # 1.
     if await check_if_user_exists(asession=asession, user=user):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Username already exists."
+            detail="Username already exists.", status_code=status.HTTP_400_BAD_REQUEST
         )
 
     # 2.
