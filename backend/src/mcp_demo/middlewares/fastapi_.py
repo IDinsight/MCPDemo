@@ -6,6 +6,8 @@ import time
 from typing import Awaitable, Callable
 
 # Third Party Library
+import secure
+
 from fastapi import Request, Response
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -105,27 +107,25 @@ class AuditMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Middleware that appends standard security headers to all HTTP responses.
+class SecureHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach a modern security-header bundle to every HTTP response.
 
-    Headers added:
-    - Strict-Transport-Security: Forces use of HTTPS and prevents downgrade attacks.
-    - X-Content-Type-Options: Prevents MIME-type sniffing by browsers.
-    - Referrer-Policy: Restricts how much referrer info is sent with cross-origin
-        requests.
+    Headers added
+    -------------
 
-    This middleware helps secure your API by:
+    1. Strict-Transport-Security
+    2. X-Content-Type-Options
+    3. Referrer-Policy
+    4. Content-Security-Policy
+    5. X-Frame-Options
+    6. Permissions-Policy
+    7. Server (optional banner)
 
-    1. Enforcing secure connections via HSTS:
-       - `Strict-Transport-Security: max-age={hsts_seconds}; includeSubDomains; preload`
-         instructs browsers to use HTTPS for all future requests to your domain,
-         including subdomains, for the specified duration.
-    2. Preventing MIME-type sniffing:
-       - `X-Content-Type-Options: nosniff` ensures browsers respect the declared
-         `Content-Type` header instead of inferring types, reducing XSS risk.
-    3. Limiting referrer leakage:
-       - `Referrer-Policy: same-origin` ensures that full referrer URLs, possibly
-         containing sensitive info, are only sent on same-origin requests.
+    Notes
+    -----
+
+    1. Policies are built once in ``__init__`` and reused.
+    2. Works alongside CORSMiddleware and behind Caddy.
     """
 
     def __init__(self, app: ASGIApp, hsts_seconds: int = 63_072_000):
@@ -142,35 +142,61 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         super().__init__(app)
 
-        self.hsts_value = f"max-age={hsts_seconds}; includeSubDomains; preload"
+        # Set up Content Security Policy (CSP) to restrict resources to the same origin.
+        csp = (
+            secure.ContentSecurityPolicy()
+            .default_src("'self'")
+            .script_src("'self'")
+            .style_src("'self'")
+            .img_src("'self'")
+        )
+
+        # Configure HSTS (HTTP Strict Transport Security) with a 2-year max age,
+        hsts = (
+            secure.StrictTransportSecurity()
+            .max_age(hsts_seconds)  # 2 years
+            .include_subdomains()
+            .preload()
+        )
+
+        # Store secure headers configuration in the middleware instance.
+        self.secure_headers = secure.Secure(
+            csp=csp,
+            hsts=hsts,
+            permissions=secure.PermissionsPolicy(),
+            referrer=secure.ReferrerPolicy().same_origin(),
+            server=secure.Server().set("Secure"),
+            xcto=secure.XContentTypeOptions().nosniff(),
+            xfo=secure.XFrameOptions().deny(),
+        )
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
-        """Process the incoming request and append security headers to the response.
+        """Intercept request --> response cycle and patch the response with security
+        headers.
+
+        This middleware does not modify the request or response body, it only appends
+        security headers to the response.
 
         Parameters
         ----------
         request
             The incoming FastAPI request.
         call_next
-            The next ASGI app in the middleware stack.
+            The next ASGI app in the middleware stack, which processes the request and
+            returns a response.
 
         Returns
         -------
         Response
-            The modified response with security headers.
+            The response from the FastAPI application, with security headers added.
         """
 
-        response: Response = await call_next(request)
+        # Let FastAPI handle the request first.
+        response = await call_next(request)
 
-        # Enforce HTTPS.
-        response.headers.setdefault("Strict-Transport-Security", self.hsts_value)
-
-        # Disable MIME sniffing.
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-
-        # Referrer trimming.
-        response.headers.setdefault("Referrer-Policy", "same-origin")
+        # Patch the outgoing response in-place.
+        await self.secure_headers.set_headers_async(response)  # type: ignore
 
         return response

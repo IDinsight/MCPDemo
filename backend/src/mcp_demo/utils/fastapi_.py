@@ -27,7 +27,7 @@ from slowapi.util import get_remote_address
 # Package Library
 from mcp_demo import admin, auth, clients, scopes, users
 from mcp_demo.config import Settings
-from mcp_demo.middlewares.fastapi_ import AuditMiddleware, SecurityHeadersMiddleware
+from mcp_demo.middlewares.fastapi_ import AuditMiddleware, SecureHeadersMiddleware
 from mcp_demo.middlewares.prometheus_ import PrometheusMiddleware
 from mcp_demo.utils.general import make_dir
 
@@ -109,9 +109,9 @@ def create_fastapi_app() -> FastAPI:
         allow_methods=["*"],
         allow_origins=origins,
     )
-    app.add_middleware(PrometheusMiddleware)
-    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(SecureHeadersMiddleware)
     app.add_middleware(SlowAPIMiddleware)
+    app.add_middleware(PrometheusMiddleware)
 
     # 5.
     metrics_app = create_metrics_app()

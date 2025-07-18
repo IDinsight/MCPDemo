@@ -1178,6 +1178,7 @@ dependencies = [
     { name = "python-jose", extra = ["cryptography"] },
     { name = "pyyaml" },
     { name = "redis" },
+    { name = "secure" },
     { name = "sentry-sdk", extra = ["fastapi"] },
     { name = "slowapi" },
     { name = "sqlalchemy" },
@@ -1237,6 +1238,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "redis", specifier = ">=6.2.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.5.4" },
+    { name = "secure", specifier = ">=1.0.1" },
     { name = "sentry-sdk", extras = ["fastapi"], specifier = "==2.23.1" },
     { name = "slowapi", specifier = ">=0.1.9" },
     { name = "sqlalchemy", specifier = ">=2.0.41" },
@@ -2064,6 +2066,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c0/0a/1cdbabf9edd0ea7747efdf6c9ab4e7061b085aa7f9bfc36bb1601563b069/s3transfer-0.10.4.tar.gz", hash = "sha256:29edc09801743c21eb5ecbc617a152df41d3c287f67b615f73e5f750583666a7", size = 145287, upload-time = "2024-11-20T21:06:05.981Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/66/05/7957af15543b8c9799209506df4660cba7afc4cf94bfb60513827e96bed6/s3transfer-0.10.4-py3-none-any.whl", hash = "sha256:244a76a24355363a68164241438de1b72f8781664920260c48465896b712a41e", size = 83175, upload-time = "2024-11-20T21:06:03.961Z" },
+]
+
+[[package]]
+name = "secure"
+version = "1.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/70/57/5739d3872f706cf53bfa365ef6e85f5df7ec5ee82ce3ed11f9af41a76af1/secure-1.0.1.tar.gz", hash = "sha256:942c10b8cfbde9e3a7961cf17833c9139d6e14ee39d23428230e4b8c8bc2de26", size = 21282, upload-time = "2024-10-18T09:24:58.031Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f4/63/99c753d364c482e29f33ff63799680b37ea55c57cc879567a6bff650afcd/secure-1.0.1-py3-none-any.whl", hash = "sha256:f0bb7bb12c684e8e30026a5480833170197146163fcb61a80d1af1710c0478da", size = 26423, upload-time = "2024-10-18T09:24:57.098Z" },
 ]
 
 [[package]]
