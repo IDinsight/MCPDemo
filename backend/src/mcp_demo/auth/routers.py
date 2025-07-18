@@ -638,7 +638,7 @@ async def refresh_token_endpoint(
     form: RefreshTokenRequestForm,
     request: Request,
     csrf_protect: CsrfProtect = Depends(),
-    x_csrf_token: str = Header(..., alias="X-CSRF-Token"),  # pylint: disable=W0613
+    x_csrf_token: str = Header(None, alias="X-CSRF-Token"),  # pylint: disable=W0613
 ) -> JSONResponse:
     """Rotate a refresh token to issue a new access token.
 

@@ -57,7 +57,7 @@ async def admin_panel(
         A message indicating access to the admin panel.
     """
 
-    return {"message": "Welcome to the admin panel!", "client_id": claims["client_id"]}
+    return {"message": "Welcome to the admin panel!", "client_id": claims["sub"]}
 
 
 @router.post(
