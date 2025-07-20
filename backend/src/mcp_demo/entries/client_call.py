@@ -60,6 +60,7 @@ async def _run_client(
     *,
     auth_type: str,
     host: str,
+    include_external_servers: bool,
     port: int,
     password: str,
     server_mount_path: str,
@@ -74,6 +75,8 @@ async def _run_client(
         The type of authentication to use. Options are "bearer" or "oauth".
     host
         The host address for the MCP client.
+    include_external_servers
+        Whether to include external servers in the MCP client.
     password
         The password for the MCP client.
     port
@@ -86,7 +89,6 @@ async def _run_client(
         The username for the MCP client.
     """
 
-    include_external_servers = False
     client: Client = Client(
         log_handler=log_handler,
         transport=get_mcp_config(
@@ -101,7 +103,9 @@ async def _run_client(
         ),
     )
     server_prefix = "main_server_" if include_external_servers else ""
-    resource_prefix = f"{server_prefix}/" if include_external_servers else ""
+    resource_prefix = (
+        f"{server_prefix.rstrip('_')}/" if include_external_servers else ""
+    )
     async with client:
         logger.success(f"MCP client connection status: {client.is_connected()}")
 
@@ -237,6 +241,12 @@ def main(
         help="The host address for the MCP client.",
         show_default=True,
     ),
+    include_external_servers: bool = typer.Option(
+        False,
+        "--include-external-servers",
+        help="Whether to include external servers in the MCP client.",
+        show_default=True,
+    ),
     password: str = typer.Option(
         "password",
         "--password",
@@ -277,6 +287,8 @@ def main(
         The type of authentication to use. Options are "bearer" or "oauth".
     host
         The host address for the MCP client.
+    include_external_servers
+        Whether to include external servers in the MCP client.
     password
         The password for the MCP client.
     port
@@ -304,6 +316,7 @@ def main(
         _run_client(
             auth_type=auth_type,
             host=host,
+            include_external_servers=include_external_servers,
             password=password,
             port=port,
             server_mount_path=server_mount_path,

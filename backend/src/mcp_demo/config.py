@@ -76,7 +76,6 @@ class BackendSettings(BaseSettings):
     RATE_LIMIT_LOGIN_RATE: str = "5/minute"
 
     # Redis
-    REDIS_CACHE_PREFIX_CHAT: str = os.getenv("REDIS_CACHE_PREFIX_CHAT", "chat_sessions")
     REDIS_CACHE_PREFIX_JTI: str = "jti:{jti}"
     REDIS_CACHE_PREFIX_JWKS_CURRENT: str = "jwks:current"
     REDIS_CACHE_PREFIX_LOCK_CLIENT: str = "lock:{client_id}:{ip}"

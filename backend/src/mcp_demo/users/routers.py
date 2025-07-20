@@ -45,7 +45,6 @@ TAG_METADATA = {"description": "Manages users", "name": "User"}
 router = APIRouter(prefix="/user", tags=[TAG_METADATA["name"]])
 
 RATE_LIMIT_LOGIN_RATE = Settings.RATE_LIMIT_LOGIN_RATE
-REDIS_CACHE_PREFIX_CHAT = Settings.REDIS_CACHE_PREFIX_CHAT
 REDIS_URL = Settings.REDIS_URL
 
 limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL)

@@ -28,7 +28,7 @@ async def get_weather(*, city: str, ctx: Context) -> WeatherData:
         A Pydantic model containing the weather data for the specified city.
     """
 
-    await ctx.error("In get_weather tool, this is an error message.")
+    await ctx.error("In get_weather tool, this is a fake error message.")
     return WeatherData(
         city=city,
         condition="partly cloudy",
