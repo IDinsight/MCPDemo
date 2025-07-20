@@ -318,26 +318,6 @@ def redact_tokens(record: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def remove_json_markdown(*, text: str) -> str:
-    """Remove JSON markdown from text.
-
-    Parameters
-    ----------
-    text
-        The text containing the JSON markdown.
-
-    Returns
-    -------
-    str
-        The text with the json markdown removed.
-    """
-
-    text = text.strip()
-    text = re.sub(r"```(json)?\n", "", text).rstrip("```")
-    text = text.replace(r"\{", "{").replace(r"\}", "}")
-    return text.strip()
-
-
 def sanitize_token(*, token: str) -> str:
     """Sanitize a token by removing the "Bearer " prefix and stripping whitespace.
 

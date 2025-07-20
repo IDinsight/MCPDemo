@@ -6,10 +6,10 @@ Any configurations added to backend/.env should be added to `BackendSettings` as
 # Standard Library
 import os
 
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 # Third Party Library
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,9 +32,6 @@ class BackendSettings(BaseSettings):
     AUTH_TOKEN_ISSUER: str = "https://tokens.local"
     AUTH_TOKEN_REFRESH_TTL: int = 60 * 60 * 24 * 30  # 30 days
     AUTH_TOKEN_TTL: int = 900  # 15 minutes
-
-    # Chat
-    CHAT_ENV: str = "dev"
 
     # Cross-Site Request Forgery (CSRF)
     CSRF_SECRET_KEY: SecretStr = Field(
@@ -60,20 +57,8 @@ class BackendSettings(BaseSettings):
     FASTMCP_PORT: int = 8100
     FASTMCP_TRANSPORT: Literal["http", "sse", "stdio", "streamable-http"] = "http"
 
-    # LiteLLM
-    LITELLM_API_KEY: str = os.getenv("LITELLM_API_KEY", "dummy-key")
-    LITELLM_ENDPOINT: str = os.getenv("LITELLM_ENDPOINT", "http://localhost:4000")
-    LITELLM_MODEL_CHAT: str = os.getenv("LITELLM_MODEL_CHAT", "openai/chat")
-    LITELLM_MODEL_DEFAULT: str = os.getenv("LITELLM_MODEL_DEFAULT", "openai/default")
-    LITELLM_MODEL_EMBEDDING: str = os.getenv(
-        "LITELLM_MODEL_EMBEDDING", "openai/embedding"
-    )
-
     # Logging
     LOGGING_LOG_LEVEL: str = "INFO"
-
-    # Models
-    MODELS_LLM: str = "openai/gpt-4o"
 
     # Postgres
     POSTGRES_ASYNC_API: str = Field("asyncpg", validation_alias="POSTGRES_ASYNC_API")
@@ -106,22 +91,6 @@ class BackendSettings(BaseSettings):
     SENTRY_DSN: Optional[str] = None
     SENTRY_TRACES_SAMPLE_RATE: float = 1.0
 
-    # Text Generation Parameters
-    TEXT_GENERATION_DEFAULT: dict[str, Any] = {
-        "frequency_penalty": 0.0,
-        "n": 1,
-        "presence_penalty": 0.0,
-        "temperature": 0.7,
-        "top_p": 0.9,
-    }
-    TEXT_GENERATION_OPENAI: dict[str, Any] = {
-        "frequency_penalty": 0.0,
-        "n": 1,
-        "presence_penalty": 0.0,
-        "temperature": 0.7,
-        "top_p": 0.9,
-    }
-
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="allow"
     )
@@ -137,68 +106,6 @@ class BackendSettings(BaseSettings):
         """
 
         return f"postgresql+{cls().POSTGRES_SYNC_API}://{cls().POSTGRES_USER}:{cls().POSTGRES_PASSWORD}@{cls().POSTGRES_HOST}:{cls().POSTGRES_PORT}/{cls().POSTGRES_DB}"
-
-    @field_validator("MODELS_LLM", mode="before")
-    @classmethod
-    def validate_model_names(cls, value: str) -> str:
-        """Ensure that the model names starts with either 'openai/' or
-        'sentence-transformers/'.
-
-        Parameters
-        ----------
-        value
-            The model name to validate.
-
-        Returns
-        -------
-        str
-            The validated model name.
-
-        Raises
-        ------
-        ValueError
-            If the model name does not start with the allowed prefixes.
-        """
-
-        allowed_prefixes = ("openai/", "sentence-transformers/")
-        if not value.startswith(allowed_prefixes):
-            raise ValueError(
-                f"Invalid model name: '{value}'. "
-                f"Must start with one of {allowed_prefixes}."
-            )
-        return value
-
-    @field_validator("*", mode="before")
-    @classmethod
-    def validate_litellm_models(cls, value: Any, info: Any) -> Any:
-        """Validate all fields that start with "LITELLM_MODEL_".
-
-        Parameters
-        ----------
-        value
-            The value to validate.
-        info
-            Metadata about the field being validated, including its name.
-
-        Returns
-        -------
-        Any
-            The validated value if it passes the checks.
-
-        Raises
-        ------
-        ValueError
-            If the value does is an empty string or does not start with "openai/".
-        """
-
-        if info.field_name.startswith("LITELLM_MODEL_") and not value.startswith(
-            "openai/"
-        ):
-            raise ValueError(
-                f"{info.field_name} must be a non-empty string that starts with "
-                f"'openai/'."
-            )
-        return value
 
 
 Settings: BackendSettings = BackendSettings()

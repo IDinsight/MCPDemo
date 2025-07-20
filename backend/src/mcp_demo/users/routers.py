@@ -38,7 +38,6 @@ from mcp_demo.users.utils import (
     save_user_to_db,
     verify_recovery_code,
 )
-from mcp_demo.utils.chat import AsyncChatSessionManager, get_chat_session_manager
 from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.general import generate_recovery_codes
 
@@ -407,7 +406,6 @@ async def delete_user(
     request: Request,  # pylint: disable=W0613
     user_id: int,
     asession: AsyncSession = Depends(get_async_session),
-    csm: AsyncChatSessionManager = Depends(get_chat_session_manager),
 ) -> UserDeleteResponse:
     """Delete user by ID from database and Redis caches.
 
@@ -415,7 +413,6 @@ async def delete_user(
 
     1. Check if the authenticated user has permission to delete the user.
     2. Delete the user from the database.
-    3. Delete the chat history from the chat session manager.
 
     NB: To prevent inference attacks, we also raise a 404 error if the calling user ID
     is not the same as the user ID to delete.
@@ -430,8 +427,6 @@ async def delete_user(
         The user ID to delete.
     asession
         The SQLAlchemy async session to use for all database connections.
-    csm
-        An async chat session manager that manages the chat sessions for each user.
 
     Returns
     -------
@@ -475,13 +470,6 @@ async def delete_user(
             detail="Error deleting user.",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         ) from e
-
-    # 3.
-    chat_session_exists, session_id = await csm.check_if_chat_session_exists(
-        namespace=REDIS_CACHE_PREFIX_CHAT, signed=True, user_id=f"{user_id}"
-    )
-    if chat_session_exists:
-        await csm.delete_chat_history(session_id=session_id)
 
     return UserDeleteResponse(user_id=user_id, username=user_db.username)
 

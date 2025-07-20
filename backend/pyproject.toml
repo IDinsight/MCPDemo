@@ -103,7 +103,6 @@ dependencies = [
     "greenlet>=3.2.3",
     "griffe>=1.7.2",
     "gunicorn==23.0.0",
-    "litellm[proxy]>=1.63.14",
     "loguru>=0.7.2",
     "natsort>=8.4.0",
     "openai>=1.93.0",

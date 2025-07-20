@@ -60,17 +60,6 @@ services:
       - "${POSTGRES_PORT}:${POSTGRES_PORT}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-  litellm:
-    command: ["--config", "/app/config.yaml", "--detailed_debug", "--telemetry", "False"]
-    container_name: litellm-dev
-    env_file:
-      - .env
-    image: "${DOCKER_LITELLM_IMAGE}"
-    ports:
-      - "${LITELLM_PORT}:${LITELLM_PORT}"
-    restart: always
-    volumes:
-      - ${PATHS_PROJECT_DIR}/cicd/litellm/litellm_config.yaml:/app/config.yaml
   mcp:
     build:
       context: ${PATHS_PROJECT_DIR}

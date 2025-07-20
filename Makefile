@@ -25,20 +25,7 @@ ifneq (,$(wildcard .env))
 endif
 
 ########## DEV SETUP ##########
-up-local: up-litellm up-pgvector up-redis ## Set up the local development environment by starting all containers
-
-up-litellm: ## Set up LiteLLM container
-	$(call clean-docker-container,litellm-proxy)
-	@sleep 2
-	@echo "$(GREEN)Starting a new LiteLLM container...$(RESET)"
-	@docker run \
-		--name litellm-proxy-local \
-		--rm \
-		-v "$(CURDIR)/cicd/litellm/litellm_config.yaml":/app/config.yaml \
-		--env-file "$(CURDIR)/cicd/litellm/.env" \
-		-p 4000:4000 \
-		-d $(DOCKER_LITELLM_IMAGE) \
-		--config /app/config.yaml --detailed_debug --telemetry False
+up-local: up-pgvector up-redis ## Set up the local development environment by starting all containers
 
 up-pgvector: ## Set up pg-vector container
 	$(call clean-docker-container,pg-vector-local)
@@ -65,10 +52,7 @@ up-redis: ## Set up Redis container
 
 
 ########## DEV TEARDOWN ##########
-down-local: down-litellm down-pgvector down-redis ## Tear down all local development containers
-
-down-litellm: ## Tear down LiteLLM container
-	$(call clean-docker-container,litellm-proxy-local)
+down-local: down-pgvector down-redis ## Tear down all local development containers
 
 down-pgvector: ## Tear down pg-vector container
 	$(call clean-docker-container,pg-vector-local)
