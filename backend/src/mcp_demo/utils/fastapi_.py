@@ -57,8 +57,9 @@ class CSRFSettings(BaseSettings):
 def create_fastapi_app() -> FastAPI:
     """Create the FastAPI application for the backend.
 
-    1. Create a FastAPI application instance and attach the MCP server instance to its
-        state.
+    The process is as follows:
+
+    1. Create a FastAPI application instance.
     2. Include routers for all the endpoints.
     3. Add exception handlers.
     4. Add middlewares.

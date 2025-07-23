@@ -1,4 +1,6 @@
-"""This module contains the FastAPI application for the backend."""
+"""This module serves to initialize the backend application and set up any necessary
+configurations and logging.
+"""
 
 # Package Library
 from mcp_demo.config import Settings
