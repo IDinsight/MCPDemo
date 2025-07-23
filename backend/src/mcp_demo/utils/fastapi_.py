@@ -31,6 +31,7 @@ from mcp_demo.middlewares.fastapi_ import AuditMiddleware, SecureHeadersMiddlewa
 from mcp_demo.middlewares.prometheus_ import PrometheusMiddleware
 from mcp_demo.utils.general import make_dir
 
+CADDY_BACKEND_ROOT_API = os.getenv("CADDY_BACKEND_ROOT_API", "/api")
 CADDY_DOMAIN_NAME = os.getenv("CADDY_DOMAIN_NAME", "localhost")
 REDIS_URL = Settings.REDIS_URL
 SENTRY_DSN = Settings.SENTRY_DSN
@@ -73,7 +74,6 @@ def create_fastapi_app() -> FastAPI:
     # 1.
     app = FastAPI(
         debug=True,
-        docs_url="/docs",
         lifespan=lifespan_fastapi,
         openapi_tags=[
             admin.TAG_METADATA,
@@ -82,7 +82,7 @@ def create_fastapi_app() -> FastAPI:
             scopes.TAG_METADATA,
             users.TAG_METADATA,
         ],
-        root_path="" if CADDY_DOMAIN_NAME == "localhost" else "/api",
+        root_path=CADDY_BACKEND_ROOT_API,
         title="MCP Demo APIs",
     )
 

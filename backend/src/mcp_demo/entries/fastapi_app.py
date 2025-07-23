@@ -91,7 +91,6 @@ def main(
         log_level=Settings.LOGGING_LOG_LEVEL.lower(),
         reload=not no_reload,
         reload_dirs=[str(project_dir / "backend" / "src")],
-        root_path=os.getenv("CADDY_BACKEND_ROOT_API", ""),
     )
 
 
