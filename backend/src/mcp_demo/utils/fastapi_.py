@@ -233,7 +233,7 @@ async def lifespan_fastapi(app: FastAPI) -> AsyncIterator[None]:
     try:
         # 1.
         logger.info("Initializing Redis client...")
-        app.state.redis = await aioredis.from_url(f"{REDIS_URL}", decode_responses=True)
+        app.state.redis = await aioredis.from_url(REDIS_URL, decode_responses=True)
         logger.success("Redis connection established!")
 
         # 2.
