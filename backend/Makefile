@@ -1,6 +1,6 @@
 #!make
 
-.PHONY: clean fresh-env help install lint uv-check-updates uv-lock uv-sync uv-update-deps
+.PHONY: clean clean-docker clean-docker-container fresh-env help install lint test-alembic uv-check-updates uv-lock uv-sync uv-update-deps
 
 # Put it first so that "make" without argument is like "make help".
 help: ## Display available commands
@@ -9,7 +9,7 @@ help: ## Display available commands
 
 ########## GLOBALS ##########
 SHELL := /bin/bash
-PROJECT_NAME = IdeaGenerator
+PROJECT_NAME = MCPDemo
 
 # Color codes for output.
 RED := $(shell tput setaf 1)
@@ -23,6 +23,8 @@ VENV ?= .venv
 PYTHON = $(VENV)/bin/python
 UV = uv
 UV_PIP = $(UV) pip
+
+export-test-env = set -a && source ./tests/test.env && set +a &&
 
 ########## CLEAN UP ##########
 # Delete all compiled Python files.
@@ -95,3 +97,76 @@ uv-update-deps: ## Update everything to the newest versions allowed by pyproject
 	@echo "$(YELLOW)Exporting dependencies to requirements files...$(RESET)"
 	@$(UV_PIP) install -r ../cicd/requirements/requirements.txt -r ../cicd/requirements/requirements_dev.txt --upgrade
 	@echo "$(GREEN)Dependencies exported.$(RESET)"
+
+########## DOCKER ##########
+# WARNING: this deletes **all** local Docker data. Use with caution!
+clean-docker: ## Remove every container, image, volume, network, build cache & history
+	@echo "$(RED)Stopping and deleting all containers...$(RESET)"
+	-@docker stop $$(docker ps -q) 2>/dev/null || true
+	-@docker rm -f $$(docker ps -aq) 2>/dev/null || true
+	@echo "$(RED)Tearing down every docker-compose project...$(RESET)"
+	-@docker compose ls | tail -n +2 | awk '{print $$1}' | while read -r p; do \
+		docker compose -p $$p down --rmi all --volumes --remove-orphans ; \
+	done
+	@echo "$(RED)Pruning dangling images, networks, and anonymous volumes...$(RESET)"
+	-@docker system prune -a --volumes -f
+	@echo "$(RED)Force deleting all named volumes...$(RESET)"
+	-@docker volume rm -f $$(docker volume ls -q) 2>/dev/null || true
+	@echo "$(RED)Cleaning BuildKit layer caches for every builder...$(RESET)"
+	-@for b in $$(docker buildx ls --format '{{.Name}}'); do \
+		docker buildx prune -af --builder $$b ; \
+	done 2>/dev/null || true
+	@echo "$(RED)Removing Buildx 'Builds' history records shown in Docker Desktop...$(RESET)"
+	-@for b in $$(docker buildx ls --format '{{.Name}}'); do \
+		docker buildx history rm --all --builder $$b ; \
+	done 2>/dev/null || true
+	@echo "Docker Desktop is now squeaky-clean ✔"
+
+clean-docker-container = \
+	@echo "$(RED)Stopping and removing container: $(1)...$(RESET)"; \
+	docker stop $(1) || true; \
+	docker rm $(1) || true; \
+	docker system prune -f
+
+########## TEST SETUP ##########
+test-alembic: up-pgvector up-redis run-tests-alembic down-pgvector down-redis
+
+# NB: `pytest-alembic` requires the DB engine to point an empty database. Thus, alembic
+# tests should be run first.
+run-tests-alembic:
+	@$(export-test-env) \
+	python -m pytest -rPQ -m "alembic" --cov-report term-missing --cov-config=./pyproject.toml --cov=. tests/test_alembic_migrations.py
+
+up-pgvector: ## Set up pg-vector container
+	$(call clean-docker-container,pg-vector-test)
+	@sleep 2
+	@echo "$(GREEN)Starting a new pg-vector container...$(RESET)"
+	@$(export-test-env) \
+	docker run \
+		--name pg-vector-test \
+		-p 5433:5432 \
+		-e POSTGRES_PASSWORD \
+		-e POSTGRES_USER \
+		-e POSTGRES_DB \
+		-d $(DOCKER_PG_VECTOR_IMAGE)
+	@sleep 2
+	@echo "$(GREEN)Running database migrations...$(RESET)"
+	@$(export-test-env) \
+	python -m alembic upgrade head
+
+up-redis: ## Set up Redis container
+	$(call clean-docker-container,redis-test)
+	@sleep 2
+	@echo "$(GREEN)Starting a new Redis container...$(RESET)"
+	@$(export-test-env) \
+	docker run \
+		--name redis-test \
+     	-p 6381:6379 \
+	 	-d $(DOCKER_REDIS_IMAGE)
+
+########## TEST TEARDOWN ##########
+down-pgvector: ## Tear down pg-vector container
+	$(call clean-docker-container,pg-vector-test)
+
+down-redis: ## Tear down Redis container
+	$(call clean-docker-container,redis-test)
