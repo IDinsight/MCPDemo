@@ -130,7 +130,7 @@ oauth_2_multi_scheme = OAuth2(
             },
             tokenUrl="/auth/token",
         ),
-        password=OAuthFlowPassword(tokenUrl="/auth/token"),
+        password=OAuthFlowPassword(tokenUrl="auth/token"),  # No leading slash here!
     ),
     scheme_name="OAuth2MultiScheme",  # Label that appears in Swagger-UI
 )

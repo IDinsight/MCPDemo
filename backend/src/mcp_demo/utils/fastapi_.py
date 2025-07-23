@@ -73,6 +73,7 @@ def create_fastapi_app() -> FastAPI:
     # 1.
     app = FastAPI(
         debug=True,
+        docs_url="/docs",
         lifespan=lifespan_fastapi,
         openapi_tags=[
             admin.TAG_METADATA,
@@ -81,6 +82,7 @@ def create_fastapi_app() -> FastAPI:
             scopes.TAG_METADATA,
             users.TAG_METADATA,
         ],
+        root_path="" if CADDY_DOMAIN_NAME == "localhost" else "/api",
         title="MCP Demo APIs",
     )
 

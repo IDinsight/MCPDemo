@@ -98,7 +98,7 @@ Demo of various MCP features.
     1. Run `make fresh-env`. This will create a new virtual environment for the backend and install all dependencies.
     2. Run `source .venv/bin/activate`: This will activate the virtual environment created by `make fresh-env`.
 4. **Initialize user and client**
-    1. Go to [http://localhost:8000/docs](http://localhost:8000/docs) to view and interact with the backend API routes.
+    1. Go to [https://dev.localhost/api/docs](https://dev.localhost/api/docs) to view and interact with the backend API routes.
     2. Create a new user using the `/user/register-first-user` endpoint in the FastAPI docs. Use the following credentials:
         - `username`: `user1`
         - `password`: `user1`

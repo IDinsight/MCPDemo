@@ -215,7 +215,7 @@ class SecureHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
 
         # Patch the outgoing response in-place.
-        if request.url.path.startswith(("/docs", "/redoc", "/openapi.json", "/static")):
+        if request.url.path.endswith(("/docs", "/redoc", "/openapi.json", "/static")):
             await self.secure_headers_docs.set_headers_async(
                 response  # type: ignore[arg-type]
             )
