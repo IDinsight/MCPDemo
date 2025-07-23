@@ -37,6 +37,7 @@ services:
         condition: service_started
     env_file:
       - .env
+      - ${PATHS_PROJECT_DIR}/.env
     image: "${DOCKER_CADDY_IMAGE}"
     ports:
       - "${CADDY_HTTP_PORT}:${CADDY_HTTP_PORT}"
