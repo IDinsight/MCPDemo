@@ -13,12 +13,12 @@ router = APIRouter(prefix="/admin", tags=[TAG_METADATA["name"]])
 
 @router.get("/health", summary="Application healthcheck")
 async def healthcheck() -> JSONResponse:
-    """Healthcheck endpoint that checks connection to the database.
+    """Healthcheck endpoint that emits a simple JSON response.
 
     Returns
     -------
     JSONResponse
-        A JSON response with the status of the database connection.
+        A JSON response with the status of the application.
     """
 
     return JSONResponse(content={"status": "ok"}, status_code=status.HTTP_200_OK)
