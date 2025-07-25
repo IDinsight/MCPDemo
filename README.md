@@ -24,14 +24,14 @@ Demo of various MCP features.
 
 1. Install [direnv](https://direnv.net/docs/installation.html).
 2. Install the latest version of [uv](https://docs.astral.sh/uv/) using: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-3. Clone the `main` branch of the repo (`git clone git@github.com:IDinsight/MCPDemo.git`) and cd into the root directory of the repo.
+3. Run `git clone git@github.com:IDinsight/MCPDemo.git` and cd into the root directory of the repo.
 4. Copy the **root** `.template.env` to `.env` and update the following environment variables in `.env`:
     1. `AUTH_RSA_PASSPHRASE`: Run `openssl rand -base64 48` in terminal to generate a random passphrase.
     2. `CSRF_SECRET_KEY`: Run `openssl rand -base64 32` in terminal to generate a random CSRF secret key.
     3. `PATHS_PROJECT_DIR`: Set this to the absolute path of the root directory of the repo.
     4. `PATHS_SECRETS_DIR`: Set this to `PATHS_PROJECT_DIR/secrets`.
 5. Allow `direnv` to load the root environment variables by running `direnv allow`.
-6. [OPTIONAL (ONLY IF YOU WANT TO RUN IN DEV ENVIRONMENT)] cd in the cicd/deployment/docker-compose directory of the repo and copy `docker-compose/.template.env` to `docker-compose/.env` and update:
+6. **[OPTIONAL (ONLY IF YOU WANT TO RUN IN DEV ENVIRONMENT)]** cd in the cicd/deployment/docker-compose directory of the repo and copy `docker-compose/.template.env` to `docker-compose/.env` and update:
     1. `AUTH_RSA_PASSPHRASE`: Run `openssl rand -base64 48` in terminal to generate a random passphrase.
     2. `CSRF_SECRET_KEY`: Run `openssl rand -base64 32` in terminal to generate a random CSRF secret key.
     3. `PATHS_PROJECT_DIR`: Set this to the absolute path of the root directory of the repo.
@@ -42,7 +42,7 @@ Demo of various MCP features.
 
 ## Local Startup Instructions
 
-1. [OPTIONAL] If you started the dev environment first, then from the root directory, run `make down-dev` to stop all dev environment containers.
+1. **[OPTIONAL]** If you started the dev environment first, then from the root directory, run `make down-dev` to stop all dev environment containers.
 2. From the root directory, run `make up-local`. This will initialize the Docker containers for the local environment.
 3. cd into the backend directory of the repo and:
     1. Run `make fresh-env`. This will create a new virtual environment for the backend and install all dependencies.
@@ -94,10 +94,10 @@ Demo of various MCP features.
 1. Ctrl-C to stop the FastAPI server, main MCP server, and external MCP server in each of their respective terminal windows.
 2. In the backend directory, run `deactivate`. This will exit out of the virtual environment created by `uv`.
 3. cd back to the root directory and run `make down-local`. This will stop all local containers.
-4. [OPTIONAL] In the root directory, run `make clean-docker`. This will remove all Docker images and containers created during the local testing setup. Use this command with caution as it will remove all Docker images and containers, not just those related to this project.
+4. **[OPTIONAL]** In the root directory, run `make clean-docker`. This will remove all Docker images and containers created during the local testing setup. Use this command with caution as it will remove all Docker images and containers, not just those related to this project.
 
 ## Dev Startup Instructions
-1. [OPTIONAL] If you started the local environment first, then from the root directory, run `make down-local` to stop all local environment containers.
+1. **[OPTIONAL]** If you started the local environment first, then from the root directory, run `make down-local` to stop all local environment containers.
 2. From the root directory, run `make up-dev`. This will initialize the Docker containers for the dev environment using Docker compose.
 3. cd into the backend directory of the repo.
     1. Run `make fresh-env`. This will create a new virtual environment for the backend and install all dependencies.
@@ -142,4 +142,4 @@ Demo of various MCP features.
 
 1. In the backend directory, run `deactivate`. This will exit out of the virtual environment created by `uv`.
 2. cd back to the root directory and run `make down-dev`. This will stop all dev containers.
-3. [OPTIONAL] In the root directory, run `make clean-docker`. This will remove all Docker images and containers created during the local testing setup. Use this command with caution as it will remove all Docker images and containers, not just those related to this project.
+3. **[OPTIONAL]** In the root directory, run `make clean-docker`. This will remove all Docker images and containers created during the local testing setup. Use this command with caution as it will remove all Docker images and containers, not just those related to this project.
