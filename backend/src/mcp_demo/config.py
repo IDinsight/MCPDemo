@@ -19,6 +19,10 @@ class BackendSettings(BaseSettings):
     # Authentication
     AUTH_ALLOWED_SCOPES: set[str] = {"admin", "read", "write"}
     AUTH_AUDIENCE: str = "MCP_Demo_Server"
+    AUTH_CODE_REDIS_PREFIX: str = "auth:code:"
+    AUTH_CODE_TTL_SECONDS: float = (
+        300  # Five‑minute max, well below the 10‑min spec. limit
+    )
     AUTH_FILELOCK_TIMEOUT: int = 2
     AUTH_JWK_ALGORITHM: str = "RS256"
     AUTH_JWKS_FN: str = "jwks.json"
