@@ -19,14 +19,17 @@ class BackendSettings(BaseSettings):
     # Authentication
     AUTH_ALLOWED_SCOPES: set[str] = {"admin", "read", "write"}
     AUTH_AUDIENCE: str = "MCP_Demo_Server"
-    AUTH_CODE_REDIS_PREFIX: str = "auth:code:"
-    AUTH_CODE_TTL_SECONDS: float = (
-        300  # Five‑minute max, well below the 10‑min spec. limit
-    )
+    AUTH_CODE_TTL: float = 300  # Five‑minute max, well below the 10‑min spec. limit
+    AUTH_CODE_VERIFIER_MAX_LEN: int = 128
+    AUTH_CODE_VERIFIER_MIN_LEN: int = 43
     AUTH_FILELOCK_TIMEOUT: int = 2
     AUTH_JWK_ALGORITHM: str = "RS256"
     AUTH_JWKS_FN: str = "jwks.json"
     AUTH_JWKS_URI: str = "http://0.0.0.0:8000/auth/jwks.json"
+    AUTH_PKCE_ALLOWED_METHODS: set[str] = {
+        "S256",  # RFC 7636 §4.2 – recommended
+        "plain",  # Optional fall-back for legacy clients
+    }
     AUTH_ROTATION_KEEP_LAST_N: int = 2
     AUTH_RSA_KEY_SIZE: int = Field(3072, ge=1024)
     AUTH_RSA_PASSPHRASE: SecretStr = Field(
@@ -80,6 +83,7 @@ class BackendSettings(BaseSettings):
     RATE_LIMIT_LOGIN_RATE: str = "5/minute"
 
     # Redis
+    REDIS_CACHE_PREFIX_AUTH_CODE: str = "auth:code:{code_hash}"
     REDIS_CACHE_PREFIX_JTI: str = "jti:{jti}"
     REDIS_CACHE_PREFIX_JWKS_CURRENT: str = "jwks:current"
     REDIS_CACHE_PREFIX_LOCK_CLIENT: str = "lock:{client_id}:{ip}"

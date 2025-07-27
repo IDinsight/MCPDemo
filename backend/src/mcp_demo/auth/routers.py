@@ -2,31 +2,29 @@
 
 Notes:
 
-1. This authentication flow supports two OAuth2 grant types:
+1. This authentication flow supports three OAuth2 grant types:
+    - Authorization-code + PKCE (Proof Key for Code Exchange): This is the recommended
+        flow for web applications and mobile apps. It involves redirecting the user to
+        the authorization server to log in and authorize the client, which then
+        receives an authorization code that can be exchanged for an access token.
     - Password Grant (grant_type=password): User-based login with username/password.
     - Client Credentials Grant (grant_type=client_credentials): Machine-to-machine auth
         using client ID/secret.
 
-   Both result in access tokens (JWTs), but the subject (sub) and claims differ:
+    Both password and client credentials grant types result in access tokens (JWTs),
+    but the subject (sub) and claims differ:
         - `sub` is a user ID in password grant.
         - `sub` is a client ID in client_credentials grant.
 
-   In OAuth2, each token is associated with a set of scopes (e.g., read, write, admin).
-    These scopes are enforced by the authentication flow defined here. This is more
-    granular and secure than traditional Bearer auth, which typically has
+    For the authorization code flow, the `sub` is the user ID of the resource owner
+    who authorized the client. The access token issued in this flow is also a JWT.
+
+    In OAuth2, each token is associated with a set of scopes (e.g., read, write,
+    admin). These scopes are enforced by the authentication flow defined here. This is
+    more granular and secure than traditional Bearer auth, which typically has
     all-or-nothing access. **However**, we also enforce scopes manually with the
     `scopes` package for Password Grant.
-2. The authentication flow does NOT include Authorization-code + PKCE (Proof Key for
-    Code Exchange). We would implement PKCE if we plan on supporting:
-        - Single‑page web apps (React, Vue) that **can’t hide a client secret**
-        - Native mobile apps (iOS/Android)
-        - Any scenario where users log in through a browser pop‑up or redirect flow and
-            we want maximum phishing/interception protection.
-
-   Client‑credentials and password grants are fine for internal services and
-   first‑party apps. PKCE is in addition to (not instead of) client‑credentials and the
-   two serve different audiences.
-3. Access tokens are:
+2. Access tokens are:
     - Short-lived (e.g., 15 min)
     - Passed around often (in headers or cookies)
     - Stored in memory or in short-lived storage
@@ -60,16 +58,16 @@ Notes:
    keeping users authenticated for long periods, without repeatedly asking for
    passwords. Users still need the access token every time, but the refresh token is
    what keeps that access token renewable behind the scenes, without burdening the user.
-4. Key rotation happens server-side (not client) and users do not need to manually
+3. Key rotation happens server-side (not client) and users do not need to manually
     generate new RSA passphrases. Clients do not need to rotate their own keys (unless
     we want to add such a feature in the future).
-5. Clients should fetch the current JWKS periodically (or cache and re-fetch on
+4. Clients should fetch the current JWKS periodically (or cache and re-fetch on
     signature failure).
-6. The RSA passphrase is the single point of encryption for all private keys. Every new
+5. The RSA passphrase is the single point of encryption for all private keys. Every new
     RSA private key used for JWT signing is encrypted on disk with the same passphrase
     (AUTH_RSA_PASSPHRASE). This protects the keys at rest---even if someone steals the
     `.pem` files, they can't read them without the passphrase.
-7. If an attacker got access to the passphrase, then they could decrypt the `.pem`
+6. If an attacker got access to the passphrase, then they could decrypt the `.pem`
     files and forge JWTs by signing tokens offline, backdate tokens with valid
     signatures, and bypass revocation systems using stateless tokens. Key rotation
     prevents this by periodically changing the passphrase and deleting old keys beyond
@@ -82,10 +80,11 @@ Notes:
 import hashlib
 
 from typing import Any
+from urllib.parse import urlencode
 
 # Third Party Library
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi_csrf_protect import CsrfProtect
 from jose import JWTError, jwt
@@ -101,16 +100,19 @@ from mcp_demo.auth.schemas import (
     TokenResponse,
 )
 from mcp_demo.auth.utils import (
+    AuthorizationCodeRequestForm,
     ClientCredentialsRequestForm,
     _verify_caller,
+    generate_authorization_code,
     generate_refresh_token,
     get_cached_jwks,
     get_jwt_token,
     get_least_privileged_scopes,
+    redeem_authorization_code,
     require_scopes,
     rotate_refresh_token,
 )
-from mcp_demo.clients.utils import verify_client
+from mcp_demo.clients.utils import get_client_by_id, verify_client
 from mcp_demo.config import Settings
 from mcp_demo.users.utils import get_user_scopes_by_id, verify_user
 from mcp_demo.utils.database import get_async_session
@@ -194,6 +196,138 @@ async def get_jwks() -> JSONResponse:
 
     jwks = await get_cached_jwks()
     return JSONResponse({"keys": jwks["keys"]})  # Exclude internal metadata
+
+
+@router.get(
+    "/authorize",
+    include_in_schema=False,
+    response_class=RedirectResponse,
+    summary="OAuth 2.1 Authorization Endpoint (Authorization Code + PKCE)",
+)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
+async def authorization_endpoint(  # pylint: disable=R0917
+    request: Request,
+    asession: AsyncSession = Depends(get_async_session),
+    claims: dict[str, Any] = Depends(
+        require_scopes(required_scopes=set())
+    ),  # User must be logged‑in
+    client_id: str = "",
+    code_challenge: str = "",
+    code_challenge_method: str = "S256",
+    response_type: str = "code",
+    redirect_uri: str = "",
+    scope: str = "",
+    state: str | None = None,
+) -> RedirectResponse:
+    """Issue a single‑use authorization code and redirect back to the client. Assumes
+    the resource‑owner is already authenticated and has granted consent.
+
+    Real‑world deployments present a login + consent UI; here we piggy‑back on
+    `require_scopes` so any already‑authenticated user may authorise. In other words,
+    the resource-owner (identified by `claims`) must already be authenticated. Consent
+    UI is outside the scope of this function.
+
+    The process is as follows:
+
+    1. Validate the `response_type` parameter. Only "code" is supported.
+    2. Validate the registered client and redirect URI.
+    3. Check if the client enforces PKCE (Proof Key for Code Exchange).
+    4. Validate the requested scopes against the client's registered scopes.
+    5. Generate and persist an authorization code, which is a single-use code that
+        the client can exchange for an access token.
+    6. Build the redirect URI with the authorization code and state parameter, and
+        redirect the user back to the client.
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    claims
+        The claims of the authenticated user, which are used to verify that the user
+        is logged in and has the necessary permissions to authorize the client.
+    client_id
+        The client ID of the application requesting authorization. This should match a
+        registered client in the system.
+    code_challenge
+        The code challenge for PKCE (Proof Key for Code Exchange). This is used to
+        enhance security by preventing authorization code interception attacks.
+    code_challenge_method
+        The method used to generate the code challenge. For PKCE, this is typically
+        "S256" (SHA-256) or "plain". The default is "S256".
+    response_type
+        The type of response expected by the client. For this endpoint, it should be
+        "code" to indicate that an authorization code is being requested.
+    redirect_uri
+        The URI to which the authorization server will redirect the user after
+        authorization. This must match one of the redirect URIs registered for the
+        client.
+    scope
+        A space-separated list of scopes that the client is requesting access to. The
+        scopes must be a subset of the scopes registered for the client.
+    state
+        An optional state parameter that the client can use to maintain state between
+        the request and the callback. This is useful for preventing CSRF attacks.
+
+    Returns
+    -------
+    RedirectResponse
+        A redirect response that sends the user back to the client with the
+        authorization code and state parameter.
+
+    Raises
+    ------
+    HTTPException
+        If the client is not registered, the redirect URI is not allowed, or the
+        requested scopes are invalid.
+    """
+
+    # 1.
+    if response_type != "code":
+        raise HTTPException(
+            detail='Only "code" `response_type` is supported.',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # 2.
+    client_db = await get_client_by_id(asession=asession, client_id=client_id)
+    if not client_db or not client_db.is_active:
+        raise HTTPException(
+            detail="Client not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    # 3.
+    if redirect_uri not in client_db.redirect_uris:
+        raise HTTPException(
+            detail="Redirect URI not allowed.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # 4.
+    sub = str(claims["sub"])
+    scopes = await get_least_privileged_scopes(
+        allowed_scopes=list(client_db.scopes), requested_scopes=scope.split(), sub=sub
+    )
+
+    # 5.
+    code_plain = await generate_authorization_code(
+        client_id=client_id,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+        redirect_uri=redirect_uri,
+        redis_client=request.app.state.redis,
+        scopes=scopes,
+        sub=sub,
+    )
+
+    # 6.
+    query = urlencode({"code": code_plain, "state": state or ""})
+
+    return RedirectResponse(
+        f"{redirect_uri}?{query}", status_code=status.HTTP_302_FOUND
+    )
 
 
 @router.post(
@@ -301,10 +435,10 @@ async def token_endpoint(
     asession: AsyncSession = Depends(get_async_session),
     credentials: HTTPBasicCredentials = Depends(basic_auth),
     csrf_protect: CsrfProtect = Depends(),
-    form: ClientCredentialsRequestForm = Depends(),
+    form: AuthorizationCodeRequestForm | ClientCredentialsRequestForm = Depends(),
 ) -> JSONResponse | TokenResponse:
-    """Issue a Bearer token via OAuth2 Client-Credentials **or** Password grant. Upon
-    successful authentication (whether machine or human) a short‑lived RS256 JWT is
+    """Issue a Bearer token via OAuth2 Authorization Code +PKCE, Client-Credentials,
+    **or** Password grant. Upon successful authentication a short‑lived RS256 JWT is
     issued in addition to a refresh token.
 
     NB: We cannot use the `require_scopes` dependency here because it requires a
@@ -313,6 +447,15 @@ async def token_endpoint(
     based on the provided credentials and form data.
 
     The process is as follows:
+
+    For the "authorization_code" grant type:
+
+    1. Validate and consume an authorization code and return its stored payload.
+    2. Get a JWT token using the client's scopes and the passphrase from settings.
+    3. Generate a refresh token for the client, which can be used to obtain new access
+        tokens without re-authenticating.
+    4. Create a `TokenResponse` containing the access token, its expiration time,
+        the refresh token, and its expiration time.
 
     For the "client_credentials" grant type:
 
@@ -467,6 +610,46 @@ async def token_endpoint(
     redis_client = request.app.state.redis
 
     match form.grant_type:
+        case "authorization_code":
+            client_id = form.client_id or ""
+            code_plain = form.code or ""
+            code_verifier = form.code_verifier or ""
+            redirect_uri = form.redirect_uri or ""
+
+            # 1.
+            payload = await redeem_authorization_code(
+                client_id=client_id,
+                code_plain=code_plain,
+                code_verifier=code_verifier,
+                redirect_uri=redirect_uri,
+                redis_client=redis_client,
+            )
+            scopes = payload["scope"].split()
+            sub = payload["sub"]
+
+            # 2.
+            access_token = await get_jwt_token(
+                grant_type="authorization_code",
+                passphrase=AUTH_RSA_PASSPHRASE.get_secret_value(),
+                redis_client=redis_client,
+                scopes=scopes,
+                sub=sub,
+            )
+
+            # 3.
+            refresh_token, refresh_ttl = await generate_refresh_token(
+                client_id=client_id, redis_client=redis_client, scopes=scopes, sub=sub
+            )
+
+            # 4.
+            return TokenResponse(
+                access_token=access_token,
+                expires_in=AUTH_TOKEN_TTL,
+                refresh_token=refresh_token,
+                refresh_token_expires_in=refresh_ttl,
+                scopes=scopes,
+                token_type="Bearer",
+            )
         case "client_credentials":
             client_id = form.client_id or (
                 credentials.username if credentials else None
