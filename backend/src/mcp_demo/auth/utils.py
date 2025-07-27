@@ -90,7 +90,14 @@ from redis import asyncio as aioredis
 
 # Package Library
 from mcp_demo.config import Settings
-from mcp_demo.utils.general import atomic_write, make_dir, sanitize_token
+from mcp_demo.utils.general import (
+    atomic_write,
+    generate_secure_string,
+    make_dir,
+    pkce_s256,
+    sanitize_token,
+    validate_code_verifier,
+)
 
 _JWKS_CACHE: dict[str, Any] | None = None  # In-memory copy
 _JWKS_MTIME: float | None = None  # Last os.stat mtime
@@ -104,9 +111,11 @@ _LOCK = FileLock(str(_SECRETS_DIR / ".rotate.lock"), timeout=2)
 
 AUTH_ALLOWED_SCOPES = Settings.AUTH_ALLOWED_SCOPES
 AUTH_AUDIENCE = Settings.AUTH_AUDIENCE
+AUTH_CODE_TTL = Settings.AUTH_CODE_TTL
 AUTH_FILELOCK_TIMEOUT = Settings.AUTH_FILELOCK_TIMEOUT
 AUTH_JWK_ALGORITHM = Settings.AUTH_JWK_ALGORITHM
 AUTH_JWKS_FN = Settings.AUTH_JWKS_FN
+AUTH_PKCE_ALLOWED_METHODS = Settings.AUTH_PKCE_ALLOWED_METHODS
 AUTH_RSA_PASSPHRASE = Settings.AUTH_RSA_PASSPHRASE
 AUTH_ROTATION_KEEP_LAST_N = Settings.AUTH_ROTATION_KEEP_LAST_N
 AUTH_RSA_KEY_SIZE = Settings.AUTH_RSA_KEY_SIZE
@@ -114,6 +123,7 @@ AUTH_RSA_PUBLIC_EXPONENT = Settings.AUTH_RSA_PUBLIC_EXPONENT
 AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
 AUTH_TOKEN_REFRESH_TTL = Settings.AUTH_TOKEN_REFRESH_TTL
 AUTH_TOKEN_TTL = Settings.AUTH_TOKEN_TTL
+REDIS_CACHE_PREFIX_AUTH_CODE = Settings.REDIS_CACHE_PREFIX_AUTH_CODE
 REDIS_CACHE_PREFIX_JTI = Settings.REDIS_CACHE_PREFIX_JTI
 REDIS_CACHE_PREFIX_JWKS_CURRENT = Settings.REDIS_CACHE_PREFIX_JWKS_CURRENT
 REDIS_CACHE_PREFIX_SUB_JTIS = Settings.REDIS_CACHE_PREFIX_SUB_JTIS
@@ -191,6 +201,46 @@ class ClientCredentialsRequestForm:
         self.password = password
         self.scopes: list[str] = requested_scope.split()
         self.username = username
+
+
+class AuthorizationCodeRequestForm(ClientCredentialsRequestForm):
+    """Form model for authorization + PKCE grant type."""
+
+    def __init__(
+        self,
+        *,
+        client_id: str = Form(...),
+        code: str = Form(...),
+        code_verifier: str = Form(..., min_length=43, max_length=128),
+        grant_type: str = Form("authorization_code", regex="^authorization_code$"),
+        redirect_uri: str = Form(...),
+    ) -> None:
+        """Initialize the form with required fields for authorization code flow.
+
+        Parameters
+        ----------
+        client_id
+            The client identifier issued to the client during registration.
+        code
+            The authorization code received from the authorization server after user
+            authorization. This code is used to exchange for an access token.
+        code_verifier
+            The code verifier used in the PKCE (Proof Key for Code Exchange) flow. This
+            is a cryptographically random string that is used to enhance security.
+        grant_type
+            The OAuth2 grant type, must be 'authorization_code'. This indicates that
+            the client is using the authorization code flow to obtain an access token.
+        redirect_uri
+            The URI to which the authorization server will redirect the user after
+            authorization. This must match one of the pre-registered redirect URIs for
+            the client.
+        """
+
+        super().__init__(client_id=client_id, grant_type=grant_type)
+
+        self.code = code
+        self.code_verifier = code_verifier
+        self.redirect_uri = redirect_uri
 
 
 def _build_keys_by_kid(*, new_jwks: dict[str, Any]) -> dict[str, Any]:
@@ -282,6 +332,55 @@ def _set_cache(*, mtime: float | None, new_jwks: dict[str, Any]) -> None:
         # Never mutate the existing dict; just point to a fresh copy.
         _JWKS_CACHE = new_jwks
         _JWKS_MTIME = mtime
+
+
+async def _store_authorization_code(
+    *, code_plain: str, payload: dict[str, Any], redis_client: aioredis.Redis
+) -> None:
+    """Persist a single‑use authorization code (SHA‑256 hashed) in Redis.
+
+    The payload MUST at minimum contain:
+        1. client_id
+        2. code_challenge
+        3. code_challenge_method
+        4. redirect_uri
+        5. scope
+        6. sub
+
+    Parameters
+    ----------
+    code_plain
+        The plain text authorization code to hash and store. This is the code that will
+        be used by the client to exchange for an access token.
+    payload
+        The payload to store in Redis, typically containing client information and
+        authorization code metadata. This payload is used to validate the code when
+        the client later exchanges it for an access token.
+    redis_client
+        The Redis client used to store the authorization code. This is used to persist
+        the code securely and allow for later retrieval.
+    """
+
+    assert all(
+        x in payload
+        for x in [
+            "client_id",
+            "code_challenge",
+            "code_challenge_method",
+            "redirect_uri",
+            "scope",
+            "sub",
+        ]
+    ), f"Missing required fields in payload: {payload}"
+    key = REDIS_CACHE_PREFIX_AUTH_CODE.format(
+        code_hash=hashlib.sha256(code_plain.encode(), usedforsecurity=True).hexdigest()
+    )
+    await redis_client.set(
+        ex=AUTH_CODE_TTL,
+        name=key,
+        nx=True,  # Only the first insertion wins (prevents replay)
+        value=json.dumps(payload, separators=(",", ":")),
+    )
 
 
 async def _store_refresh_token(
@@ -451,6 +550,79 @@ def b64url(*, data: bytes) -> str:
     """
 
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+async def generate_authorization_code(
+    *,
+    client_id: str,
+    code_challenge: str,
+    code_challenge_method: str,
+    redirect_uri: str,
+    redis_client: aioredis.Redis,
+    scopes: list[str],
+    sub: str,
+) -> str:
+    """Create, persist, and return a new authorization code.
+
+    Parameters
+    ----------
+    client_id
+        The client ID for which the authorization code is being generated. This is
+        typically the ID of the client application that is requesting the code.
+    code_challenge
+        The code challenge generated by the client, used in PKCE (Proof Key for Code
+        Exchange) to enhance security. This is a transformation of the code verifier.
+    code_challenge_method
+        The method used to generate the code challenge, typically "S256" for SHA-256.
+    redirect_uri
+        The URI to which the authorization code will be sent after the user grants
+        permission. This must match one of the pre-registered redirect URIs for the
+        client.
+    redis_client
+        The Redis client used to store the authorization code. This is used to persist
+        the code securely and allow for later retrieval.
+    scopes
+        A list of scopes that the authorization code will grant access to. Scopes
+        define the permissions associated with the code, such as read or write access.
+    sub
+        The subject for which the authorization code is being generated, typically a
+        user ID or client ID. This identifies the entity that the code will be
+        associated with.
+
+    Returns
+    -------
+    str
+        The generated authorization code as a plain text string. This code can be used
+        by the client to exchange for an access token after the user has authenticated
+        and authorized the request.
+
+    Raises
+    ------
+    ValueError
+        If the `code_challenge_method` is not supported. The allowed methods are defined
+        in `AUTH_PKCE_ALLOWED_METHODS`.
+    """
+
+    if code_challenge_method not in AUTH_PKCE_ALLOWED_METHODS:
+        raise ValueError("Unsupported code_challenge_method.")
+
+    code_plain = generate_secure_string()
+
+    await _store_authorization_code(
+        code_plain=code_plain,
+        redis_client=redis_client,
+        payload={
+            "client_id": client_id,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+            "exp": int(time.time()) + AUTH_CODE_TTL,
+            "redirect_uri": redirect_uri,
+            "scope": " ".join(scopes),
+            "sub": sub,
+        },
+    )
+
+    return code_plain
 
 
 async def generate_refresh_token(
@@ -1110,6 +1282,94 @@ async def process_lock() -> AsyncIterator[None]:
         yield
     finally:
         _LOCK.release()
+
+
+async def redeem_authorization_code(
+    *,
+    client_id: str,
+    code_plain: str,
+    code_verifier: str,
+    redirect_uri: str,
+    redis_client: aioredis.Redis,
+) -> dict[str, Any]:
+    """Validate and consume an authorization code and return its stored payload.
+
+    Parameters
+    ----------
+    client_id
+        The client ID that requested the authorization code. This is used to verify
+        that the code was issued for the correct client.
+    code_plain
+        The plain text authorization code that the client received after user
+        authorization. This code is used to prove that the client has been authorized
+        by the user.
+    code_verifier
+        The code verifier used in the PKCE (Proof Key for Code Exchange) flow. This is
+        used to verify that the client is the same one that requested the authorization
+        code. It is a random string generated by the client and sent along with the
+        authorization code.
+    redirect_uri
+        The redirect URI that the client used when requesting the authorization code.
+        This is used to verify that the code was issued for the correct redirect URI.
+    redis_client
+        The Redis client used to retrieve the authorization code. This is used to
+        securely store and retrieve the authorization code, ensuring that it can only
+        be used once.
+
+    Returns
+    -------
+    dict[str, Any]
+        The payload associated with the authorization code, which includes information
+        such as the client ID, redirect URI, code challenge, and scopes. This payload
+        is used to issue an access token to the client after successful validation.
+
+    Raises
+    ------
+    HTTPException
+        If the authorization code is invalid, expired, or does not match the expected
+        client ID or redirect URI. This ensures that only valid and authorized requests
+        can redeem the authorization code.
+    """
+
+    code_hash = hashlib.sha256(code_plain.encode(), usedforsecurity=True).hexdigest()
+    key = REDIS_CACHE_PREFIX_AUTH_CODE.format(code_hash=code_hash)
+    raw = await redis_client.getdel(key)  # Get + Delete (1‑time use)
+
+    if not raw:
+        raise HTTPException(
+            detail="Invalid or expired code.", status_code=status.HTTP_400_BAD_REQUEST
+        )
+
+    payload = json.loads(raw)
+
+    if payload["client_id"] != client_id:
+        raise HTTPException(
+            detail="Client ID mismatch.", status_code=status.HTTP_400_BAD_REQUEST
+        )
+    if payload["redirect_uri"] != redirect_uri:
+        raise HTTPException(
+            detail="Redirect URI mismatch.", status_code=status.HTTP_400_BAD_REQUEST
+        )
+
+    # PKCE verification.
+    try:
+        validate_code_verifier(code_verifier=code_verifier)
+    except ValueError as exc:
+        raise HTTPException(
+            detail=str(exc), status_code=status.HTTP_400_BAD_REQUEST
+        ) from exc
+
+    if payload["code_challenge_method"] == "plain":
+        expected = code_verifier
+    else:  # S256
+        expected = pkce_s256(code_verifier=code_verifier)
+
+    if not secrets.compare_digest(expected, payload["code_challenge"]):
+        raise HTTPException(
+            detail="PKCE verification failed.", status_code=status.HTTP_400_BAD_REQUEST
+        )
+
+    return payload
 
 
 def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:

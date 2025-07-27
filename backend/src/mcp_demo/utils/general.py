@@ -7,6 +7,8 @@ instead.
 """
 
 # Standard Library
+import base64
+import hashlib
 import os
 import random
 import re
@@ -25,6 +27,12 @@ from argon2 import PasswordHasher
 from argon2 import exceptions as argon2_exc
 from argon2.low_level import Type
 from loguru import logger
+
+# Package Library
+from mcp_demo.config import Settings
+
+AUTH_CODE_VERIFIER_MAX_LEN = Settings.AUTH_CODE_VERIFIER_MAX_LEN
+AUTH_CODE_VERIFIER_MIN_LEN = Settings.AUTH_CODE_VERIFIER_MIN_LEN
 
 # Tuned for 64 MiB & 2 rounds ≈ 120 ms on AWS t4g.medium.
 _PH = PasswordHasher(
@@ -230,6 +238,48 @@ def generate_recovery_codes(*, code_length: int = 20, num_codes: int = 5) -> lis
     return recovery_codes
 
 
+def generate_secure_string(*, length: int = 64) -> str:
+    """Return a high‑entropy, URL‑safe string suitable for *authorization codes*.
+
+    Parameters
+    ----------
+    length
+        Number of **bytes** of entropy before base‑64url encoding (default 64 is
+        approx. 86 printable characters).
+
+    Notes
+    -----
+    RFC 6749 allows the authorization code to be an opaque string. We use
+    `secrets.token_urlsafe()` because it already performs URL‑safe base64 encoding
+    without `=` padding.
+    """
+
+    return secrets.token_urlsafe(length)
+
+
+def hash_authorization_code(*, code: str) -> str:
+    """Hash `code` with SHA‑256 **without** salting (we do not need KDF).
+
+    KDF stands for Key Derivation Function, which is used to derive a key from a
+    password or other input. In this case, we are simply hashing the authorization code
+    using SHA‑256, which is a cryptographic hash function. This is sufficient for our
+    use case, as we are not storing the code in a way that requires protection against
+    brute-force attacks or other forms of attack that would benefit from a KDF.
+
+    Parameters
+    ----------
+    code
+        The authorization code to hash.
+
+    Returns
+    -------
+    str
+        The SHA‑256 hash of the authorization code.
+    """
+
+    return hashlib.sha256(code.encode(), usedforsecurity=True).hexdigest()
+
+
 def make_dir(dir_: str | Path, mode: int = 0o777, verbose: bool = True) -> None:
     """Create a directory.
 
@@ -251,6 +301,24 @@ def make_dir(dir_: str | Path, mode: int = 0o777, verbose: bool = True) -> None:
         Path.mkdir(dir_, exist_ok=True, mode=mode, parents=True)
         if verbose:
             logger.success(f"Created directory: {dir_}")
+
+
+def pkce_s256(*, code_verifier: str) -> str:
+    """Return RFC 7636 S256 code‑challenge from the supplied verifier.
+
+    Parameters
+    ----------
+    code_verifier
+        The code verifier to hash.
+
+    Returns
+    -------
+    str
+        The base64url-encoded SHA-256 hash of the code verifier.
+    """
+
+    digest = hashlib.sha256(code_verifier.encode()).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
 def recurse_replace(new_str: str, orig_str: str, x: Any) -> Any:
@@ -333,6 +401,31 @@ def sanitize_token(*, token: str) -> str:
     """
 
     return token.removeprefix("Bearer ").strip()
+
+
+def validate_code_verifier(*, code_verifier: str) -> None:
+    """Raise `ValueError` when `verifier` violates RFC 7636 length constraints.
+
+    Parameters
+    ----------
+    code_verifier
+        The code verifier to validate.
+
+    Raises
+    -------
+    ValueError
+        If the code verifier length is not within the allowed range.
+    """
+
+    if (
+        not AUTH_CODE_VERIFIER_MIN_LEN
+        <= len(code_verifier)
+        <= AUTH_CODE_VERIFIER_MAX_LEN
+    ):
+        raise ValueError(
+            f"Code verifier length must be {AUTH_CODE_VERIFIER_MIN_LEN}‑"
+            f"{AUTH_CODE_VERIFIER_MAX_LEN} characters (got {len(code_verifier)})."
+        )
 
 
 def verify_hash(*, text: str, hashed: str) -> tuple[bool, str | None]:
