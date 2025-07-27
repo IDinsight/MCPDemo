@@ -4,7 +4,7 @@
 from datetime import datetime
 
 # Third Party Library
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 
 # Clients.
@@ -12,7 +12,11 @@ class OAuth2Client(BaseModel):
     """Pydantic model for OAuth2 clients."""
 
     client_id: str = Field(
-        ..., max_length=64, min_length=2, description="Public client identifier"
+        ...,
+        description="Public identifier issued by the auth‑server",
+        examples=["my_cool_app"],
+        max_length=64,
+        min_length=2,
     )
 
     model_config = ConfigDict(from_attributes=True)
@@ -21,13 +25,31 @@ class OAuth2Client(BaseModel):
 class OAuth2ClientCreate(OAuth2Client):
     """Pydantic model for creating an OAuth2 client."""
 
-    is_active: bool = True
-    scopes: list[str] = ["read"]
-    secret: str = Field(
-        ..., max_length=128, min_length=4, description="Plaintext secret"
+    allowed_code_challenge_methods: list[str] = Field(
+        default_factory=lambda: ["S256"],
+        description="Accepted PKCE `code_challenge_method` values",
+        examples=[["S256"]],
     )
-
-    model_config = ConfigDict(from_attributes=True)
+    is_active: bool = Field(
+        default=True,
+        description="Whether the client is enabled immediately after creation",
+    )
+    pkce_enforced: bool = Field(
+        default=True,
+        description="Specifies whether PKCE is required on every authorization‑code request",
+    )
+    redirect_uris: list[HttpUrl] = Field(
+        ...,
+        description="Allowed redirect URIs for the authorization‑code flow",
+        min_length=1,
+    )
+    scopes: list[str] = Field(
+        default_factory=lambda: ["read"],
+        description="Default scopes implicitly granted to the client",
+    )
+    secret: str = Field(
+        ..., description="Plaintext secret", max_length=128, min_length=4
+    )
 
 
 class OAuth2ClientDeleteResponse(OAuth2Client):
@@ -36,23 +58,35 @@ class OAuth2ClientDeleteResponse(OAuth2Client):
     deleted_by: str
 
 
-class OAuth2ClientResetSecret(BaseModel):
-    """Pydantic model for client secret reset."""
+class OAuth2ClientListResponse(OAuth2Client):
+    """Pydantic model for OAuth2 client list response."""
 
-    client_id: str
-    client_secret: str
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class OAuth2ClientResponse(BaseModel):
-    """Pydantic model for OAuth2 client response."""
-
-    client_id: str
-    created_by: str | None = None
-    created_datetime_utc: datetime
     is_active: bool
     scopes: list[str]
-    updated_datetime_utc: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+
+class OAuth2ClientResetSecret(OAuth2Client):
+    """Pydantic model for client secret reset."""
+
+    client_secret: str = Field(
+        ...,
+        description="New plain‑text secret",
+        max_length=128,
+        min_length=4,
+    )
+
+
+class OAuth2ClientResponse(OAuth2Client):
+    """Pydantic model for OAuth2 client response."""
+
+    allowed_code_challenge_methods: list[str]
+    created_by: str | None = Field(
+        default=None,
+        description="Administrator who registered the client (nullable)",
+    )
+    created_datetime_utc: datetime
+    is_active: bool
+    pkce_enforced: bool
+    redirect_uris: list[HttpUrl]
+    scopes: list[str]
+    updated_datetime_utc: datetime
