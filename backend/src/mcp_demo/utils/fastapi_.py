@@ -5,13 +5,14 @@ import os
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Callable
+from typing import Any, AsyncIterator, Callable
 
 # Third Party Library
 import sentry_sdk
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response
 from fastapi_csrf_protect import CsrfProtect
 from fastapi_csrf_protect.exceptions import CsrfProtectError
@@ -33,6 +34,7 @@ from mcp_demo.utils.general import make_dir
 
 CADDY_BACKEND_ROOT_API = os.getenv("CADDY_BACKEND_ROOT_API", "/api")
 CADDY_DOMAIN_NAME = os.getenv("CADDY_DOMAIN_NAME", "localhost")
+FASTAPI_PORT = Settings.FASTAPI_PORT
 REDIS_URL = Settings.REDIS_URL
 SENTRY_DSN = Settings.SENTRY_DSN
 SENTRY_TRACES_SAMPLE_RATE = Settings.SENTRY_TRACES_SAMPLE_RATE
@@ -60,11 +62,12 @@ def create_fastapi_app() -> FastAPI:
     The process is as follows:
 
     1. Create a FastAPI application instance.
-    2. Include routers for all the endpoints.
-    3. Add exception handlers.
-    4. Add middlewares.
-    5. Mount the metrics app on /metrics as an independent application.
-    6. Initialize Sentry for error tracking if the SENTRY_DSN is provided.
+    2. Configure the Swagger UI with OAuth 2.1 authorization code flow.
+    3. Include routers for all the endpoints.
+    4. Add exception handlers.
+    5. Add middlewares.
+    6. Mount the metrics app on /metrics as an independent application.
+    7. Initialize Sentry for error tracking if the SENTRY_DSN is provided.
 
     Returns
     -------
@@ -88,17 +91,20 @@ def create_fastapi_app() -> FastAPI:
     )
 
     # 2.
+    app.swagger_ui_init_oauth = {"usePkceWithAuthorizationCodeGrant": True}
+
+    # 3.
     app.include_router(admin.routers.router)
     app.include_router(auth.routers.router)
     app.include_router(clients.routers.router)
     app.include_router(scopes.routers.router)
     app.include_router(users.routers.router)
 
-    # 3.
+    # 4.
     app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
     app.add_exception_handler(CsrfProtectError, csrf_protect_exception_handler)
 
-    # 4.
+    # 5.
     origins = [
         f"http://{CADDY_DOMAIN_NAME}",
         f"http://{CADDY_DOMAIN_NAME}:3000",
@@ -116,11 +122,11 @@ def create_fastapi_app() -> FastAPI:
     app.add_middleware(SlowAPIMiddleware)
     app.add_middleware(PrometheusMiddleware)
 
-    # 5.
+    # 6.
     metrics_app = create_metrics_app()
     app.mount("/metrics", metrics_app)
 
-    # 6.
+    # 7.
     if not SENTRY_DSN or SENTRY_DSN == "" or SENTRY_DSN == "https://...":
         logger.log("ATTN", "No SENTRY_DSN provided. Sentry is disabled.")
     else:
@@ -172,6 +178,57 @@ async def csrf_protect_exception_handler(
     return JSONResponse(
         {"detail": "Unhandled CSRF error"}, status_code=status.HTTP_400_BAD_REQUEST
     )
+
+
+def custom_openapi(*, app: FastAPI) -> dict[str, Any]:
+    """Inject OAuth 2.1 authorization code flow into the generated schema (before the
+    Swagger UI is rendered).
+
+    Parameters
+    ----------
+    app
+        The FastAPI application instance.
+
+    Returns
+    -------
+    dict[str, Any]
+        The OpenAPI schema with the OAuth 2.1 authorization code flow added.
+    """
+
+    if app.openapi_schema:  # Return cached value
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        description="MCP Demo APIs",
+        routes=app.routes,
+        title=app.title,
+        version="1.0.0",
+    )
+
+    openapi_schema.setdefault("components", {}).setdefault("securitySchemes", {})[
+        "OAuth2AuthorizationCode"
+    ] = {
+        "flows": {
+            "authorizationCode": {
+                "authorizationUrl": (
+                    f"http://{CADDY_DOMAIN_NAME}:{FASTAPI_PORT}{CADDY_BACKEND_ROOT_API}/auth/authorize"
+                ),
+                "tokenUrl": (
+                    f"http://{CADDY_DOMAIN_NAME}:{FASTAPI_PORT}{CADDY_BACKEND_ROOT_API}/auth/token"
+                ),
+                "scopes": {
+                    "admin": "Admin",
+                    "read": "Read data",
+                    "write": "Write data",
+                },
+            }
+        },
+        "type": "oauth2",
+    }
+
+    app.openapi_schema = openapi_schema  # Cache for future calls
+
+    return app.openapi_schema
 
 
 @CsrfProtect.load_config
@@ -241,6 +298,9 @@ async def lifespan_fastapi(app: FastAPI) -> AsyncIterator[None]:
 
         # 2.
         app.state.limiter = limiter
+
+        # 3.
+        app.openapi_schema = custom_openapi(app=app)
 
         # 3.
         logger.log("CELEBRATE", "Ready to roll! 🚀")

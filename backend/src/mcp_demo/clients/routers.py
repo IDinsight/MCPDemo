@@ -122,10 +122,13 @@ async def add_new_client(
     client_db = await save_client_to_db(asession=asession, client=oauth2_client)
 
     return OAuth2ClientResponse(
+        allowed_code_challenge_methods=client_db.allowed_code_challenge_methods,
+        client_id=client_db.client_id,
         created_by=claims["sub"],
         created_datetime_utc=client_db.created_datetime_utc,
-        client_id=client_db.client_id,
         is_active=client_db.is_active,
+        pkce_enforced=client_db.pkce_enforced,
+        redirect_uris=client_db.redirect_uris,
         scopes=client_db.scopes,
         updated_datetime_utc=client_db.updated_datetime_utc,
     )
@@ -178,10 +181,13 @@ async def register_first_client(
     client_db = await save_client_to_db(asession=asession, client=oauth2_client)
 
     return OAuth2ClientResponse(
+        allowed_code_challenge_methods=client_db.allowed_code_challenge_methods,
         client_id=client_db.client_id,
         created_by=client_db.client_id,
         created_datetime_utc=client_db.created_datetime_utc,
         is_active=client_db.is_active,
+        pkce_enforced=client_db.pkce_enforced,
+        redirect_uris=client_db.redirect_uris,
         scopes=client_db.scopes,
         updated_datetime_utc=client_db.updated_datetime_utc,
     )
@@ -243,9 +249,12 @@ async def get_user(
         ) from exc
 
     return OAuth2ClientResponse(
+        allowed_code_challenge_methods=target_client_db.allowed_code_challenge_methods,
         client_id=target_client_db.client_id,
         created_datetime_utc=target_client_db.created_datetime_utc,
         is_active=target_client_db.is_active,
+        pkce_enforced=target_client_db.pkce_enforced,
+        redirect_uris=target_client_db.redirect_uris,
         scopes=target_client_db.scopes,
         updated_datetime_utc=target_client_db.updated_datetime_utc,
     )
@@ -363,9 +372,12 @@ async def reset_secret(
         asession=asession, client=client, client_db=client_to_update
     )
     return OAuth2ClientResponse(
+        allowed_code_challenge_methods=updated_client_db.allowed_code_challenge_methods,
         client_id=updated_client_db.client_id,
         created_datetime_utc=updated_client_db.created_datetime_utc,
         is_active=updated_client_db.is_active,
+        pkce_enforced=updated_client_db.pkce_enforced,
+        redirect_uris=updated_client_db.redirect_uris,
         scopes=updated_client_db.scopes,
         updated_datetime_utc=updated_client_db.updated_datetime_utc,
     )

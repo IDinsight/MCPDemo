@@ -1,10 +1,19 @@
 """This module contains Pydantic models for clients."""
 
 # Standard Library
+import os
+
 from datetime import datetime
 
 # Third Party Library
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+
+# Package Library
+from mcp_demo.config import Settings
+
+CADDY_BACKEND_ROOT_API = os.getenv("CADDY_BACKEND_ROOT_API", "/api")
+CADDY_DOMAIN_NAME = os.getenv("CADDY_DOMAIN_NAME", "localhost")
+FASTAPI_PORT = Settings.FASTAPI_PORT
 
 
 # Clients.
@@ -14,7 +23,7 @@ class OAuth2Client(BaseModel):
     client_id: str = Field(
         ...,
         description="Public identifier issued by the auth‑server",
-        examples=["my_cool_app"],
+        examples=["client1"],
         max_length=64,
         min_length=2,
     )
@@ -41,6 +50,12 @@ class OAuth2ClientCreate(OAuth2Client):
     redirect_uris: list[HttpUrl] = Field(
         ...,
         description="Allowed redirect URIs for the authorization‑code flow",
+        examples=[
+            [
+                f"http://{CADDY_DOMAIN_NAME}:{FASTAPI_PORT}/{CADDY_BACKEND_ROOT_API}docs/oauth2-redirect",
+                "https://api.example.com/docs/oauth2-redirect",
+            ]
+        ],
         min_length=1,
     )
     scopes: list[str] = Field(
@@ -87,6 +102,6 @@ class OAuth2ClientResponse(OAuth2Client):
     created_datetime_utc: datetime
     is_active: bool
     pkce_enforced: bool
-    redirect_uris: list[HttpUrl]
+    redirect_uris: list[HttpUrl | str]
     scopes: list[str]
     updated_datetime_utc: datetime

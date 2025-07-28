@@ -87,8 +87,8 @@ class Oauth2ClientDB(Base):
     )
     redirect_uris: Mapped[list[str]] = mapped_column(
         ARRAY(String),
+        doc="Whitelisted redirect URIs for the authorization code flow",
         nullable=False,
-        doc="Whitelisted redirect URIs for the authorization‑code flow",
     )
     scopes: Mapped[list[str]] = mapped_column(
         ARRAY(String), default=[], doc="OAuth2 scopes granted to this client"

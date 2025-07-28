@@ -300,8 +300,11 @@ async def save_client_to_db(
         )
 
     client_db = Oauth2ClientDB(
+        allowed_code_challenge_methods=client.allowed_code_challenge_methods,
         client_id=client.client_id,
         is_active=client.is_active,
+        pkce_enforced=client.pkce_enforced,
+        redirect_uris=[str(x) for x in client.redirect_uris],
         scopes=list(set(client.scopes)),  # Dedup
         secret_hash=generate_hash(text=client.secret),
     )
