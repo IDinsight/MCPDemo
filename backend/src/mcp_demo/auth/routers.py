@@ -935,9 +935,9 @@ async def refresh_token_endpoint(
 
     1. The CSRF token is validated to ensure the request is legitimate and not a CSRF
         attack (only for humans, not machines).
-    2. The refresh token is validated and rotated, generating a new access token and
-         a new refresh token. If the `revoke_access` flag is set, the access token is
-        also revoked.
+    2. The refresh token is validated and rotated, generating a new access token and a
+        new refresh token. If the `revoke_access` flag is set, the access token is also
+        revoked.
     3. A `TokenResponse` is created containing the new access token, its expiration
         time, the new refresh token, and its expiration time.
     4. The access token is set as an HTTP-only cookie in the response, which is not
