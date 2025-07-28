@@ -84,10 +84,11 @@ from urllib.parse import urlencode
 
 # Third Party Library
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi_csrf_protect import CsrfProtect
 from jose import JWTError, jwt
+from loguru import logger
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,13 +96,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Package Library
 from mcp_demo.auth.schemas import (
     IntrospectionResponse,
+    LoginRequest,
     RefreshTokenRequestForm,
     RevokeTokenResponse,
     TokenResponse,
 )
 from mcp_demo.auth.utils import (
-    AuthorizationCodeRequestForm,
-    ClientCredentialsRequestForm,
+    TokenRequest,
     _verify_caller,
     generate_authorization_code,
     generate_refresh_token,
@@ -111,6 +112,7 @@ from mcp_demo.auth.utils import (
     redeem_authorization_code,
     require_scopes,
     rotate_refresh_token,
+    token_request_form,
 )
 from mcp_demo.clients.utils import get_client_by_id, verify_client
 from mcp_demo.config import Settings
@@ -208,8 +210,8 @@ async def get_jwks() -> JSONResponse:
 async def authorization_endpoint(  # pylint: disable=R0917
     request: Request,
     asession: AsyncSession = Depends(get_async_session),
-    claims: dict[str, Any] = Depends(
-        require_scopes(required_scopes=set())
+    claims: dict[str, Any] = require_scopes(
+        required_scopes=set()
     ),  # User must be logged‑in
     client_id: str = "",
     code_challenge: str = "",
@@ -283,6 +285,8 @@ async def authorization_endpoint(  # pylint: disable=R0917
         requested scopes are invalid.
     """
 
+    logger.debug(f"Requested scopes: {scope}")
+
     # 1.
     if response_type != "code":
         raise HTTPException(
@@ -330,6 +334,100 @@ async def authorization_endpoint(  # pylint: disable=R0917
     )
 
 
+@router.post("/login", status_code=status.HTTP_204_NO_CONTENT, summary="Password login")
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
+async def frontend_login(
+    payload: LoginRequest,
+    request: Request,
+    asession: AsyncSession = Depends(get_async_session),
+    csrf_protect: CsrfProtect = Depends(),
+) -> Response:
+    """Authenticate user credentials and drop the short-lived JWT cookie.
+
+    This endpoint is meant for CLI or Swagger UI. It accepts JSON instead of
+    `x-www-form-urlencoded` and responds with no body, only headers and cookies. Since
+    OAuth 2.1 keeps user authentication and client authorization separate, we need a
+    minimal, UI-less way to give the browser a session cookie. Without this endpoint,
+    when the browser calls `/auth/authorize`, it would redirect us to a login page that
+    does not exist.
+
+    The process is as follows:
+
+    1. Verify the user credentials against the database.
+    2. Generate a JWT access token for the user, which includes their scopes and
+        subject (user ID). This token is signed with the RSA private key.
+    3. Set the access token as an HTTP-only cookie in the response, which is not
+        accessible via JavaScript, enhancing security against XSS attacks (e.g., the
+        access token is dropped into an HTTP-only cookie).
+
+    Parameters
+    ----------
+    payload
+        The login request payload containing the username and password.
+    request
+        The FastAPI request object.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    csrf_protect
+        The CSRF protection dependency to generate and set CSRF tokens.
+
+    Returns
+    -------
+    Response
+        A response with no content and cookies set for the access token and CSRF
+        protection.
+
+    Raises
+    ------
+    HTTPException
+        If the user credentials are invalid or the user is locked out due to too many
+        failed login attempts.
+    """
+
+    # 1.
+    user_db = await verify_user(
+        asession=asession, password=payload.password, username=payload.username
+    )
+    if user_db is None:
+        raise HTTPException(
+            detail="Invalid credentials", status_code=status.HTTP_401_UNAUTHORIZED
+        )
+
+    # 2.
+    access_token = await get_jwt_token(
+        grant_type="password",
+        passphrase=AUTH_RSA_PASSPHRASE.get_secret_value(),
+        redis_client=request.app.state.redis,
+        scopes=list(
+            await get_user_scopes_by_id(asession=asession, user_id=user_db.user_id)
+        ),
+        sub=str(user_db.user_id),
+    )
+
+    # 3.
+    csrf_token, signed = csrf_protect.generate_csrf_tokens()
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    secure = FASTAPI_ENV in ["dev", "prod"]  # Sent only over HTTPS
+
+    # Set HTTP-only cookie for access token.
+    response.set_cookie(
+        httponly=True,  # Not visible to JS
+        key="access_token",
+        max_age=AUTH_TOKEN_TTL,
+        samesite="strict" if not secure else "none",
+        secure=secure,
+        value=access_token,
+    )
+
+    # Set Non-HTTP-only cookie for CSRF cookie.
+    csrf_protect.set_csrf_cookie(signed, response)
+
+    # Set unsigned CSRF token in response headers for front-end to use.
+    response.headers["X-CSRF-Token"] = csrf_token
+
+    return response
+
+
 @router.post(
     "/introspect", response_model=IntrospectionResponse, summary="Introspect tokens"
 )
@@ -337,7 +435,7 @@ async def authorization_endpoint(  # pylint: disable=R0917
 async def introspect_token(
     request: Request,
     token: str,
-    claims: dict = require_scopes(required_scopes={"admin"}),
+    claims: dict[str, Any] = require_scopes(required_scopes={"admin"}),
 ) -> IntrospectionResponse:
     """RFC 7662-style token introspection.
 
@@ -421,7 +519,7 @@ async def introspect_token(
 @router.post(
     "/token",
     description=(
-        "Authenticate via client credentials or username/password to receive an RS256 JWT.\n\n"
+        "Authenticate via authorization code + PKCE, client credentials, or username/password to receive an RS256 JWT.\n\n"
         "- **Request**: `application/x-www-form-urlencoded`\n"
         "- **Response**: JSON with `access_token`, `token_type`, `expires_in`\n"
         "- **Usage**: `Authorization: Bearer <token>` header"
@@ -435,7 +533,7 @@ async def token_endpoint(
     asession: AsyncSession = Depends(get_async_session),
     credentials: HTTPBasicCredentials = Depends(basic_auth),
     csrf_protect: CsrfProtect = Depends(),
-    form: AuthorizationCodeRequestForm | ClientCredentialsRequestForm = Depends(),
+    form: TokenRequest = Depends(token_request_form),
 ) -> JSONResponse | TokenResponse:
     """Issue a Bearer token via OAuth2 Authorization Code +PKCE, Client-Credentials,
     **or** Password grant. Upon successful authentication a short‑lived RS256 JWT is
@@ -585,8 +683,10 @@ async def token_endpoint(
         The CSRF protection dependency. This is used to generate and validate CSRF
         tokens for the password grant type. It is not used for the client credentials.
     form
-        Form data covering both client_credentials and password grants:
-            - `grant_type`: one of "client_credentials" or "password"
+        Form data covering both authorization_code, client_credentials, and password
+        grant types:
+            - `grant_type`: one of "authorization_code", "client_credentials" or
+                "password"
             - required fields vary by grant type
 
     Returns
@@ -940,7 +1040,7 @@ async def refresh_token_endpoint(
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def revoke_token(
     request: Request,
-    claims: dict = require_scopes(required_scopes={"admin"}),
+    claims: dict[str, Any] = require_scopes(required_scopes={"admin"}),
     token: str = Form(..., description="Access or refresh token to revoke"),
 ) -> RevokeTokenResponse:
     """Revoke a refresh or access token.

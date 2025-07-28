@@ -19,7 +19,7 @@ class BackendSettings(BaseSettings):
     # Authentication
     AUTH_ALLOWED_SCOPES: set[str] = {"admin", "read", "write"}
     AUTH_AUDIENCE: str = "MCP_Demo_Server"
-    AUTH_CODE_TTL: float = 300  # Five‑minute max, well below the 10‑min spec. limit
+    AUTH_CODE_TTL: int = 300  # Five‑minute max, well below the 10‑min spec. limit
     AUTH_CODE_VERIFIER_MAX_LEN: int = 128
     AUTH_CODE_VERIFIER_MIN_LEN: int = 43
     AUTH_FILELOCK_TIMEOUT: int = 2

@@ -25,6 +25,18 @@ class IntrospectionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class LoginRequest(BaseModel):
+    """Pydantic model for login request (when there is no frontend).
+
+    NB: `username`, then `password` is much more intuitive ordering for the UI.
+    """
+
+    username: str
+    password: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RefreshTokenRequestForm(BaseModel):
     """Pydantic model for refresh token request."""
 

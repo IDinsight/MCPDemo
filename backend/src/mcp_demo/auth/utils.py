@@ -163,9 +163,7 @@ class ClientCredentialsRequestForm:
             regex="^(client_credentials|password)$",
         ),
         password: str | None = Form(None, min_length=1),
-        requested_scope: str = Form(
-            default="", description="Space separated list of scopes"
-        ),
+        scope: str = Form(default="", description="Space separated list of scopes"),
         username: str | None = Form(None, min_length=1),
     ) -> None:
         """
@@ -182,7 +180,7 @@ class ClientCredentialsRequestForm:
         password
             The password of the user for password grant type. Optional, only used for
             password grant.
-        requested_scope
+        scope
             Space-separated list of scopes requested by the client. This parameter
             allows users/clients to "scope down".
         username
@@ -199,7 +197,7 @@ class ClientCredentialsRequestForm:
         self.client_secret = client_secret
         self.grant_type = grant_type
         self.password = password
-        self.scopes: list[str] = requested_scope.split()
+        self.scopes: list[str] = scope.split()
         self.username = username
 
 
@@ -209,38 +207,37 @@ class AuthorizationCodeRequestForm(ClientCredentialsRequestForm):
     def __init__(
         self,
         *,
-        client_id: str = Form(...),
         code: str = Form(...),
         code_verifier: str = Form(..., min_length=43, max_length=128),
-        grant_type: str = Form("authorization_code", regex="^authorization_code$"),
         redirect_uri: str = Form(...),
+        **kwargs: Any,
     ) -> None:
         """Initialize the form with required fields for authorization code flow.
 
         Parameters
         ----------
-        client_id
-            The client identifier issued to the client during registration.
         code
             The authorization code received from the authorization server after user
             authorization. This code is used to exchange for an access token.
         code_verifier
             The code verifier used in the PKCE (Proof Key for Code Exchange) flow. This
             is a cryptographically random string that is used to enhance security.
-        grant_type
-            The OAuth2 grant type, must be 'authorization_code'. This indicates that
-            the client is using the authorization code flow to obtain an access token.
         redirect_uri
             The URI to which the authorization server will redirect the user after
             authorization. This must match one of the pre-registered redirect URIs for
             the client.
+        kwargs
+            Additional keyword arguments for `ClientCredentialsRequestForm`.
         """
 
-        super().__init__(client_id=client_id, grant_type=grant_type)
+        super().__init__(scope=kwargs.pop("scope", ""), **kwargs)
 
         self.code = code
         self.code_verifier = code_verifier
         self.redirect_uri = redirect_uri
+
+
+TokenRequest = AuthorizationCodeRequestForm | ClientCredentialsRequestForm
 
 
 def _build_keys_by_kid(*, new_jwks: dict[str, Any]) -> dict[str, Any]:
@@ -1877,6 +1874,66 @@ def save_keypair(
     atomic_write(data=public_pem, target_fp=public_key_fp, mode="wb", perm=0o640)
 
     return private_key_fp, public_key_fp
+
+
+async def token_request_form(request: Request) -> TokenRequest:
+    """Return the correct form object based on `grant_type` in the body.
+
+    NB: In the Authorization-Code + PKCE flow, the scope parameter belongs only to the
+    first request (i.e., when the auth/authorize endpoint is called) and not to the
+    auth/token endpoint (which has this function dependency). When the user (through
+    Swagger UI) selects scopes and presses Authorize, Swagger builds a URL like:
+
+    ```
+    /auth/authorize?response_type=code
+        &client_id=client1
+        &redirect_uri=http://…/oauth2-redirect
+        &scope=read%20write%20admin  # Here is the scope parameter
+        &state=xyz
+        &code_challenge=…
+        &code_challenge_method=S256
+    ```
+
+    The server stores that exact scope string alongside the authorization code (e.g.,
+    in Redis). During the second call in the flow (to auth/token), the **client** sends
+    only the code plus the PKCE verifier. The server then looks up the cached record,
+    finds the scopes it saved earlier, and mints the JWT with those scopes---there is
+    no need for the client to repeat them. This is how the OAuth 2.0 spec is written
+    and how every major provider (Microsoft, Google, Auth0, etc.) behaves.
+
+    So the form payload when auth/token is called will contain `grant_type`, `code`,
+    `client_id`, `redirect_uri`, and `code_verifier` but no scope field is required (or
+    even allowed).
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object containing the form data.
+
+    Returns
+    -------
+    TokenRequest
+        An instance of `AuthorizationCodeRequestForm` or `ClientCredentialsRequestForm`
+        based on the `grant_type` provided in the form data.
+
+    Raises
+    ------
+    HTTPException
+        If the `grant_type` is unsupported or missing.
+    """
+
+    form = await request.form()
+    grant_type = form.get("grant_type")
+
+    if grant_type == "authorization_code":
+        return AuthorizationCodeRequestForm(**form)
+    if grant_type in ["client_credentials", "password"]:
+        return ClientCredentialsRequestForm(**form)
+
+    raise HTTPException(
+        detail="Unsupported or missing grant type.",
+        status_code=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 async def verify_refresh_token(
