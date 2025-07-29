@@ -112,11 +112,24 @@ def get_access_token_for_pkce(*, password: str, username: str) -> str:
 
     1. Use the same session to maintain cookies.
     2. Authenticate the resource owner (user) via /auth/login to set a session cookie.
-    3. Grant client-specific consent for scopes (via /user/consents).
-    4. Generate a PKCE code verifier/challenge pair.
-    5. Initiate the OAuth authorization request to /auth/authorize.
+    3. Generate a PKCE code verifier/challenge pair.
+    4. Initiate the OAuth authorization request to /auth/authorize. This step must come
+        **before** user consents because the authorization server can't ask the user to
+        approve something until it knows what the **client** is asking for (and the
+        client can only ask for scopes it has been registered with). In this step, the
+        client tells the server what scopes it wants access to. Only **after** the
+        server has that information can the server then:
+            - Authenticate the user so that it knows whose data the clients wants to
+                touch.
+            - Present a consent screen (step 5) that says something like "Client1 wants
+                admin access - Allow/Deny"
+            - The user can choose to deny the request at that point. If the user does,
+                then the server must stop the flow and send the browser back with an
+                error message and the rest of the steps never happen. Here, we do not
+                have a UI and thus, we mimic the user always consenting to the request.
+    5. Grant client-specific consent for scopes (via /user/consents).
     6. Extract the one-time `code` from the redirect URI.
-    7. Redeem the code at /auth/token with PKCE and client credentials.
+    6. Redeem the code at /auth/token with PKCE and client credentials.
     8. Return the resulting access token.
 
     Parameters
@@ -160,6 +173,37 @@ def get_access_token_for_pkce(*, password: str, username: str) -> str:
     assert cookie_token, "Cookie token not found in cookies."
 
     # 3.
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
+
+    # 4. Hardcoded redirect URI for the OAuth flow. This is included in the response
+    # from registering client1 in the FastAPI server.
+    redirect_uri = "http://localhost:8000/docs/oauth2-redirect"
+    auth_authorize_response = session.get(
+        "http://0.0.0.0:8000/auth/authorize",
+        allow_redirects=False,  # Only need the Location header
+        params={
+            "client_id": "client1",
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": "admin",
+            "state": secrets.token_urlsafe(16),
+        },
+        timeout=60,
+    )
+    if auth_authorize_response.status_code != status.HTTP_302_FOUND:
+        raise RuntimeError(
+            f"/auth/authorize failed ({auth_authorize_response.status_code}): "
+            f"{auth_authorize_response.text or auth_authorize_response.reason}"
+        )
+
+    # 5.
     user_consents_url = "http://0.0.0.0:8000/user/consents"
     headers = {
         "accept": "application/json",
@@ -183,37 +227,6 @@ def get_access_token_for_pkce(*, password: str, username: str) -> str:
             f"Failed to decode JSON response from {user_consents_url}. "
             "Please check the server configuration."
         ) from exc
-
-    # 4.
-    code_verifier = secrets.token_urlsafe(64)
-    code_challenge = (
-        base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest())
-        .rstrip(b"=")
-        .decode()
-    )
-
-    # 5. Hardcoded redirect URI for the OAuth flow. This is included in the response
-    # from registering client1 in the FastAPI server.
-    redirect_uri = "http://localhost:8000/docs/oauth2-redirect"
-    auth_authorize_response = session.get(
-        "http://0.0.0.0:8000/auth/authorize",
-        allow_redirects=False,  # Only need the Location header
-        params={
-            "client_id": "client1",
-            "code_challenge": code_challenge,
-            "code_challenge_method": "S256",
-            "response_type": "code",
-            "redirect_uri": redirect_uri,
-            "scope": "admin",
-            "state": secrets.token_urlsafe(16),
-        },
-        timeout=60,
-    )
-    if auth_authorize_response.status_code != status.HTTP_302_FOUND:
-        raise RuntimeError(
-            f"/auth/authorize failed ({auth_authorize_response.status_code}): "
-            f"{auth_authorize_response.text or auth_authorize_response.reason}"
-        )
 
     # 6.
     redirect_location = auth_authorize_response.headers["Location"]
