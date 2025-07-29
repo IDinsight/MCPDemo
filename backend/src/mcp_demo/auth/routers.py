@@ -479,6 +479,11 @@ async def introspect_token(
         its expiry, scopes, and subject/client ID.
     5. The caller's identity is set in the request state for auditing purposes.
 
+    NB: "azp" stands for authorized party. It identifies which OAuth client was
+    authorized to act on behalf of the user (e.g., client1). FastMCP or other APIs can
+    use this to distinguish between who is calling (via sub) and which client
+    authorized it (via azp).
+
     Parameters
     ----------
     request

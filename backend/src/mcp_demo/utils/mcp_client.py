@@ -1,14 +1,22 @@
 """This module contains MCP client utilities."""
 
+# Standard Library
+import base64
+import hashlib
+import secrets
+
 # Third Party Library
+import jwt as pyjwt
 import requests
 
+from fastapi import status
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 from fastmcp.client.logging import LogMessage
 from fastmcp.mcp_config import MCPConfig, RemoteMCPServer
 from loguru import logger
 from requests.auth import HTTPBasicAuth
+from yarl import URL
 
 # Package Library
 from mcp_demo.config import Settings
@@ -48,14 +56,16 @@ def get_access_token(
     # url = "https://api.example.com/api/auth/token"
 
     match grant_type:
+        case "pkce":
+            return get_access_token_for_pkce(password=password, username=username)
+        case "client_credentials":
+            payload = {"grant_type": "client_credentials"}
         case "password":
             payload = {
                 "grant_type": "password",
                 "password": password,
                 "username": username,
             }
-        case "client_credentials":
-            payload = {"grant_type": "client_credentials"}
         case _:
             raise ValueError(
                 f"Unsupported grant type: {grant_type}. "
@@ -84,6 +94,161 @@ def get_access_token(
         )
 
     return token_data["access_token"]
+
+
+def get_access_token_for_pkce(*, password: str, username: str) -> str:
+    """Perform a full OAuth 2.1 Authorization Code + PKCE flow to obtain a Bearer
+    access token for FastMCP from a FastAPI-based authorization server.
+
+    This function assumes:
+        1. The user already exists in the user database.
+        2. The client (`client1`) is registered with `client_secret`, redirect URI, and
+            allowed scopes.
+        3. The FastAPI server is running locally and exposes /auth and /user endpoints.
+        4. CORS, CSRF, and PKCE security features are enforced, and handled
+            appropriately here.
+
+    The process is as follows:
+
+    1. Use the same session to maintain cookies.
+    2. Authenticate the resource owner (user) via /auth/login to set a session cookie.
+    3. Grant client-specific consent for scopes (via /user/consents).
+    4. Generate a PKCE code verifier/challenge pair.
+    5. Initiate the OAuth authorization request to /auth/authorize.
+    6. Extract the one-time `code` from the redirect URI.
+    7. Redeem the code at /auth/token with PKCE and client credentials.
+    8. Return the resulting access token.
+
+    Parameters
+    ----------
+    password : str
+        The password for the user logging in.
+    username : str
+        The username for the user logging in.
+
+    Returns
+    -------
+    str
+        A valid JWT access token to use as a Bearer token with FastMCP.
+
+    Raises
+    ------
+    RuntimeError
+        If any step in the OAuth flow fails.
+    """
+
+    # 1.
+    session = requests.Session()
+
+    # 2.
+    auth_login_url = "http://0.0.0.0:8000/auth/login"
+    user_login_payload = {"password": password, "username": username}
+    headers = {"accept": "*/*", "Content-Type": "application/json"}
+    auth_login_response = session.post(
+        auth_login_url,
+        headers=headers,
+        json=user_login_payload,
+        timeout=60,
+    )
+    if not auth_login_response.status_code == status.HTTP_204_NO_CONTENT:
+        logger.error("Failed user login.")
+        raise RuntimeError(
+            f"Failed user login from: {auth_login_url}. "
+            f"Please check the server configuration."
+        )
+    cookie_token = auth_login_response.cookies.get("access_token", None)
+    assert cookie_token, "Cookie token not found in cookies."
+
+    # 3.
+    user_consents_url = "http://0.0.0.0:8000/user/consents"
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {cookie_token}",
+        "Content-Type": "application/json",
+    }
+    user_consents_payload = {"client_id": "client1", "scopes": ["admin"]}
+    user_consents_response = requests.post(
+        user_consents_url, headers=headers, json=user_consents_payload, timeout=60
+    )
+    if not user_consents_response.status_code == status.HTTP_201_CREATED:
+        logger.error("Failed user consents.")
+        raise RuntimeError(
+            f"Failed user consents from: {user_consents_url}. "
+            "Please check the server configuration."
+        )
+    try:
+        _ = user_consents_response.json()
+    except requests.exceptions.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Failed to decode JSON response from {user_consents_url}. "
+            "Please check the server configuration."
+        ) from exc
+
+    # 4.
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
+
+    # 5. Hardcoded redirect URI for the OAuth flow. This is included in the response
+    # from registering client1 in the FastAPI server.
+    redirect_uri = "http://localhost:8000/docs/oauth2-redirect"
+    auth_authorize_response = session.get(
+        "http://0.0.0.0:8000/auth/authorize",
+        allow_redirects=False,  # Only need the Location header
+        params={
+            "client_id": "client1",
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": "admin",
+            "state": secrets.token_urlsafe(16),
+        },
+        timeout=60,
+    )
+    if auth_authorize_response.status_code != status.HTTP_302_FOUND:
+        raise RuntimeError(
+            f"/auth/authorize failed ({auth_authorize_response.status_code}): "
+            f"{auth_authorize_response.text or auth_authorize_response.reason}"
+        )
+
+    # 6.
+    redirect_location = auth_authorize_response.headers["Location"]
+    code = URL(redirect_location).query.get("code")
+    if not code:
+        raise RuntimeError("Authorisation code missing in redirect")
+
+    # 7.
+    auth_token_response = session.post(
+        "http://0.0.0.0:8000/auth/token",
+        data={
+            "client_id": "client1",
+            "client_secret": "client1",  #  pragma: allowlist secret
+            "code": code,
+            "code_verifier": code_verifier,
+            "grant_type": "authorization_code",
+            "redirect_uri": redirect_uri,
+        },
+        timeout=60,
+    )
+    if auth_token_response.status_code != status.HTTP_200_OK:
+        raise RuntimeError(
+            f"/auth/token failed ({auth_token_response.status_code}): "
+            f"{auth_token_response.text or auth_token_response.reason}"
+        )
+
+    # 8.
+    try:
+        json_response = auth_token_response.json()
+        access_token = json_response["access_token"]
+        payload = pyjwt.decode(access_token, options={"verify_signature": False})
+        logger.debug(f"{payload = }")
+        return access_token
+    except (ValueError, KeyError) as exc:
+        raise RuntimeError("Token response did not contain 'access_token'") from exc
 
 
 def get_mcp_config(
