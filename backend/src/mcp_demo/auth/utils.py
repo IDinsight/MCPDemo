@@ -177,6 +177,9 @@ class AuthorizationCodeRequestForm:
         code: str = Form(...),
         code_verifier: str = Form(..., min_length=43, max_length=128),
         redirect_uri: str = Form(...),
+        scope: str = Form(  # pylint: disable=W0613
+            "", description="Always empty for auth-code exchange."
+        ),
     ) -> None:
         """Initialize the form with required fields for authorization code flow.
 
@@ -196,6 +199,11 @@ class AuthorizationCodeRequestForm:
             The URI to which the authorization server will redirect the user after
             authorization. This must match one of the pre-registered redirect URIs for
             the client.
+        scope
+            Space-separated list of scopes requested by the client. This parameter
+            allows clients to "scope down" the access granted by the token. In this
+            case, it is always empty, as the scopes are determined by the authorization
+            server during the authorization code exchange.
         """
 
         self.client_id = client_id
@@ -734,9 +742,6 @@ async def generate_refresh_token(
         "sub": sub,
     }
 
-    print(f"{client_id = }")
-    print(f"{sub = }")
-    input(111)
     await _store_refresh_token(
         client_id=client_id or CLIENTS_DEFAULT_ID,
         payload=payload,
