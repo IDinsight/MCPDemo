@@ -329,6 +329,7 @@ async def delete_client(
 )
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def reset_secret(
+    calling_client_db: Annotated[Oauth2ClientDB, Depends(get_current_client)],
     request: Request,  # pylint: disable=W0613
     client: OAuth2ClientResetSecret,
     asession: AsyncSession = Depends(get_async_session),
@@ -342,6 +343,9 @@ async def reset_secret(
 
     Parameters
     ----------
+    calling_client_db
+        The client database object of the authenticated client, used to verify
+        permissions.
     request
         The FastAPI request object. This is needed for SlowAPI rate limiting.
     client
@@ -358,8 +362,17 @@ async def reset_secret(
     Raises
     ------
     HTTPException
+        If the authenticated client does not have permission to reset the secret.
         If the client does not exist in the database.
     """
+
+    if calling_client_db.client_id != client.client_id:
+        caller_scopes = calling_client_db.scopes
+        if "admin" not in caller_scopes:
+            raise HTTPException(
+                detail=f"Client ID not found: {client.client_id}.",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
 
     client_to_update = await check_if_client_exists(asession=asession, client=client)
 

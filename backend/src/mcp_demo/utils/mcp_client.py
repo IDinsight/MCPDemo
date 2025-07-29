@@ -8,6 +8,7 @@ from fastmcp.client.auth import BearerAuth
 from fastmcp.client.logging import LogMessage
 from fastmcp.mcp_config import MCPConfig, RemoteMCPServer
 from loguru import logger
+from requests.auth import HTTPBasicAuth
 
 # Package Library
 from mcp_demo.config import Settings
@@ -54,18 +55,24 @@ def get_access_token(
                 "username": username,
             }
         case "client_credentials":
-            payload = {
-                "client_id": username,
-                "client_secret": password,
-                "grant_type": "client_credentials",
-            }
+            payload = {"grant_type": "client_credentials"}
         case _:
             raise ValueError(
                 f"Unsupported grant type: {grant_type}. "
                 f"Valid options are 'password', 'client_credentials', or 'pkce'."
             )
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    response = requests.post(url, data=payload, headers=headers, timeout=60)
+    response = requests.post(
+        url,
+        auth=(
+            HTTPBasicAuth(username, password)
+            if grant_type == "client_credentials"
+            else None
+        ),
+        data=payload,
+        headers=headers,
+        timeout=60,
+    )
     if response.ok:
         token_data = response.json()
         assert "access_token" in token_data, "Access token not found in response."
