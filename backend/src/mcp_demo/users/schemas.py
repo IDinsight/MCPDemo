@@ -4,7 +4,23 @@
 from datetime import datetime
 
 # Third Party Library
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+# Consent.
+class ConsentCreate(BaseModel):
+    """Pydantic model for granting consent for a set of scopes to a single client ID."""
+
+    client_id: str = Field(..., description="Public client identifier")
+    scopes: list[str] = Field(
+        ..., description="Scopes the user consents to grant", min_length=1
+    )
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ConsentInfo(ConsentCreate):
+    """Pydantic model for consent information."""
 
 
 # Users.
@@ -33,7 +49,7 @@ class UserCreateWithRecoveryCodes(UserCreate):
     recovery.
     """
 
-    created_by: int
+    created_by: str
     recovery_codes: list[str]
     scopes: list[str] = ["read"]
 

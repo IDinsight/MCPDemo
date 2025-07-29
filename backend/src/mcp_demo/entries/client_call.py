@@ -4,7 +4,7 @@ using a Bearer Authentication.
 From the backend directory of this project, this entry point can be invoked from the
 command line via:
 
-python src/mcp_demo/entries/client_call.py --username=your_username --password=your_password
+python src/mcp_demo/entries/client_call.py --grant-type=password --username=your_username --password=your_password
 """
 
 # pylint: disable=R0915
@@ -58,7 +58,7 @@ FASTMCP_TRANSPORT = Settings.FASTMCP_TRANSPORT
 
 async def _run_client(
     *,
-    auth_type: str,
+    grant_type: str,
     host: str,
     include_external_servers: bool,
     port: int,
@@ -71,8 +71,9 @@ async def _run_client(
 
     Parameters
     ----------
-    auth_type
-        The type of authentication to use. Options are "bearer" or "oauth".
+    grant_type
+        The grant type for the MCP client. Options are "password",
+        "client_credentials", or "pkce".
     host
         The host address for the MCP client.
     include_external_servers
@@ -92,7 +93,7 @@ async def _run_client(
     client: Client = Client(
         log_handler=log_handler,
         transport=get_mcp_config(
-            auth_type=auth_type,
+            grant_type=grant_type,
             host=host,
             include_external_servers=include_external_servers,
             password=password,
@@ -229,10 +230,10 @@ async def _run_client(
 @cli.command()
 def main(
     *,
-    auth_type: str = typer.Option(
-        "bearer",
-        "--auth-type",
-        help="The authentication type for the MCP client.",
+    grant_type: str = typer.Option(
+        "password",
+        "--grant-type",
+        help="The grant type for the MCP client.",
         show_default=True,
     ),
     host: str = typer.Option(
@@ -283,8 +284,9 @@ def main(
 
     Parameters
     ----------
-    auth_type
-        The type of authentication to use. Options are "bearer" or "oauth".
+    grant_type
+        The grant type for the MCP client. Options are "password",
+        "client_credentials", or "pkce".
     host
         The host address for the MCP client.
     include_external_servers
@@ -306,15 +308,15 @@ def main(
         If an unsupported authentication type is provided.
     """
 
-    if auth_type not in ["bearer", "oauth"]:
+    if grant_type not in ["password", "client_credentials", "pkce"]:
         raise ValueError(
-            f"Unsupported authentication type: {auth_type}. "
-            f"Valid options are 'bearer' or 'oauth'."
+            f"Unsupported grant type: {grant_type}. "
+            f"Valid options are 'password', 'client_credentials', or 'pkce'."
         )
 
     asyncio.run(
         _run_client(
-            auth_type=auth_type,
+            grant_type=grant_type,
             host=host,
             include_external_servers=include_external_servers,
             password=password,

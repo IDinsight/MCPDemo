@@ -83,9 +83,8 @@ from typing import Any
 from urllib.parse import urlencode
 
 # Third Party Library
-from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi_csrf_protect import CsrfProtect
 from jose import JWTError, jwt
 from loguru import logger
@@ -97,7 +96,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mcp_demo.auth.schemas import (
     IntrospectionResponse,
     LoginRequest,
-    RefreshTokenRequestForm,
+    RefreshTokenRequest,
+    RevokeTokenRequest,
     RevokeTokenResponse,
     TokenResponse,
 )
@@ -116,7 +116,7 @@ from mcp_demo.auth.utils import (
 )
 from mcp_demo.clients.utils import get_client_by_id, verify_client
 from mcp_demo.config import Settings
-from mcp_demo.users.utils import get_user_scopes_by_id, verify_user
+from mcp_demo.users.utils import get_user_consent, get_user_scopes_by_id, verify_user
 from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.rate_limit import (
     is_locked_out,
@@ -128,7 +128,6 @@ TAG_METADATA = {
     "description": "Endpoints for issuing and discovering JWTs",
     "name": "Authentication",
 }
-basic_auth = HTTPBasic(auto_error=False)  # RFC 7662 requires auth but we handle error
 router = APIRouter(prefix="/auth", tags=[TAG_METADATA["name"]])
 
 AUTH_RSA_PASSPHRASE = Settings.AUTH_RSA_PASSPHRASE
@@ -231,13 +230,18 @@ async def authorization_endpoint(  # pylint: disable=R0917
 
     The process is as follows:
 
-    1. Validate the `response_type` parameter. Only "code" is supported.
-    2. Validate the registered client and redirect URI.
-    3. Check if the client enforces PKCE (Proof Key for Code Exchange).
-    4. Validate the requested scopes against the client's registered scopes.
-    5. Generate and persist an authorization code, which is a single-use code that
+    1. Check if the user has already granted consent for the requested client and
+        scopes. If not, then refuse the request until the user explicitly grants
+        consent via the `/user/consent` endpoint. This step mimics UI consent screen
+        without rendering HTML.
+    2. Verify that every requested scope was previously consented to by the user.
+    3. Validate the `response_type` parameter. Only "code" is supported.
+    4. Validate the registered client and redirect URI.
+    5. Check if the client enforces PKCE (Proof Key for Code Exchange).
+    6. Validate the requested scopes against the client's registered scopes.
+    7. Generate and persist an authorization code, which is a single-use code that
         the client can exchange for an access token.
-    6. Build the redirect URI with the authorization code and state parameter, and
+    8. Build the redirect URI with the authorization code and state parameter, and
         redirect the user back to the client.
 
     Parameters
@@ -287,14 +291,34 @@ async def authorization_endpoint(  # pylint: disable=R0917
 
     logger.debug(f"Requested scopes: {scope}")
 
+    sub = str(claims["sub"])
+
     # 1.
+    consented_scopes = await get_user_consent(
+        client_id=client_id, redis_client=request.app.state.redis, sub=sub
+    )
+    if consented_scopes is None:
+        raise HTTPException(
+            detail="User consent required. Call /user/consent first.",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    # 2.
+    requested_scopes = set(scope.split()) if scope else set()
+    if not requested_scopes.issubset(set(consented_scopes)):
+        raise HTTPException(
+            detail="Requested scopes exceed consent granted by user.",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    # 3.
     if response_type != "code":
         raise HTTPException(
             detail='Only "code" `response_type` is supported.',
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    # 2.
+    # 4.
     client_db = await get_client_by_id(asession=asession, client_id=client_id)
     if not client_db or not client_db.is_active:
         raise HTTPException(
@@ -302,20 +326,19 @@ async def authorization_endpoint(  # pylint: disable=R0917
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
-    # 3.
+    # 5.
     if redirect_uri not in client_db.redirect_uris:
         raise HTTPException(
             detail="Redirect URI not allowed.",
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    # 4.
-    sub = str(claims["sub"])
+    # 6.
     scopes = await get_least_privileged_scopes(
         allowed_scopes=list(client_db.scopes), requested_scopes=scope.split(), sub=sub
     )
 
-    # 5.
+    # 7.
     code_plain = await generate_authorization_code(
         client_id=client_id,
         code_challenge=code_challenge,
@@ -326,7 +349,7 @@ async def authorization_endpoint(  # pylint: disable=R0917
         sub=sub,
     )
 
-    # 6.
+    # 8.
     query = urlencode({"code": code_plain, "state": state or ""})
 
     return RedirectResponse(
@@ -429,7 +452,9 @@ async def frontend_login(
 
 
 @router.post(
-    "/introspect", response_model=IntrospectionResponse, summary="Introspect tokens"
+    "/introspect",
+    response_model=IntrospectionResponse,
+    summary="Introspect access tokens",
 )
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def introspect_token(
@@ -447,9 +472,12 @@ async def introspect_token(
     1. Extract the grant type and subject from the claims of the authenticated caller.
     2. The JWT is decoded and validated---signature, expiry, and replay (jti) checks
         are performed.
-    3. The introspection response is built, indicating whether the token is active,
+    3. If the token is a client credentials token, check if the user has granted
+        consent for the client ID in the token. If not, the token is considered
+        inactive.
+    4. The introspection response is built, indicating whether the token is active,
         its expiry, scopes, and subject/client ID.
-    4. The caller's identity is set in the request state for auditing purposes.
+    5. The caller's identity is set in the request state for auditing purposes.
 
     Parameters
     ----------
@@ -477,6 +505,7 @@ async def introspect_token(
     """
 
     # 1.
+    client_id_from_token = claims.get("azp")  # For Authorization Code + PKCE flow
     grant_type = claims["gty"]
     subject = claims["sub"]
     client_id = subject if grant_type == "client_credentials" else None
@@ -501,6 +530,18 @@ async def introspect_token(
         return IntrospectionResponse(active=False)
 
     # 3.
+    if (
+        client_id_from_token
+        and await get_user_consent(
+            client_id=client_id_from_token,
+            redis_client=request.app.state.redis,
+            sub=claims["sub"],
+        )
+        is None
+    ):
+        return IntrospectionResponse(active=False)
+
+    # 4.
     response = {
         "active": True,
         "client_id": client_id,
@@ -510,7 +551,7 @@ async def introspect_token(
         "token_type": "access_token",
     }
 
-    # 4.
+    # 5.
     request.state.audit_sub = subject  # Set subject in request state for auditing
 
     return IntrospectionResponse(**response)
@@ -524,16 +565,16 @@ async def introspect_token(
         "- **Response**: JSON with `access_token`, `token_type`, `expires_in`\n"
         "- **Usage**: `Authorization: Bearer <token>` header"
     ),
+    include_in_schema=False,
     response_model=TokenResponse,
-    summary="Issue JWT via Client-Credentials or Password grant",
+    summary="Issue JWT via Authorization Code + PKCE, Client-Credentials, or Password grant",
 )
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def token_endpoint(
     request: Request,
     asession: AsyncSession = Depends(get_async_session),
-    credentials: HTTPBasicCredentials = Depends(basic_auth),
     csrf_protect: CsrfProtect = Depends(),
-    form: TokenRequest = Depends(token_request_form),
+    token_request: TokenRequest = Depends(token_request_form),
 ) -> JSONResponse | TokenResponse:
     """Issue a Bearer token via OAuth2 Authorization Code +PKCE, Client-Credentials,
     **or** Password grant. Upon successful authentication a short‑lived RS256 JWT is
@@ -674,20 +715,13 @@ async def token_endpoint(
         The FastAPI request object.
     asession
         The SQLAlchemy async session to use for all database connections.
-    credentials
-        The HTTP Basic credentials provided by the client. This is used to verify
-        the caller's identity if the grant type is "client_credentials". If the
-        grant type is "password", this parameter is ignored and the username and
-        password are taken from the form data.
     csrf_protect
         The CSRF protection dependency. This is used to generate and validate CSRF
         tokens for the password grant type. It is not used for the client credentials.
-    form
-        Form data covering both authorization_code, client_credentials, and password
-        grant types:
-            - `grant_type`: one of "authorization_code", "client_credentials" or
-                "password"
-            - required fields vary by grant type
+    token_request
+        The token request form data, which can include the grant type, client ID,
+        client secret, username, password, scopes, code, code verifier, and redirect
+        URI. This is a dependency that extracts the form data from the request body.
 
     Returns
     -------
@@ -709,12 +743,13 @@ async def token_endpoint(
     ip = request.client.host
     redis_client = request.app.state.redis
 
-    match form.grant_type:
+    match token_request.grant_type:
         case "authorization_code":
-            client_id = form.client_id or ""
-            code_plain = form.code or ""
-            code_verifier = form.code_verifier or ""
-            redirect_uri = form.redirect_uri or ""
+            input(666)
+            client_id = token_request.client_id or ""
+            code_plain = token_request.code or ""
+            code_verifier = token_request.code_verifier or ""
+            redirect_uri = token_request.redirect_uri or ""
 
             # 1.
             payload = await redeem_authorization_code(
@@ -729,6 +764,7 @@ async def token_endpoint(
 
             # 2.
             access_token = await get_jwt_token(
+                additional_claims={"azp": client_id},  # Authorized party
                 grant_type="authorization_code",
                 passphrase=AUTH_RSA_PASSPHRASE.get_secret_value(),
                 redis_client=redis_client,
@@ -751,12 +787,8 @@ async def token_endpoint(
                 token_type="Bearer",
             )
         case "client_credentials":
-            client_id = form.client_id or (
-                credentials.username if credentials else None
-            )
-            client_secret = form.client_secret or (
-                credentials.password if credentials else None
-            )
+            client_id = token_request.client_id
+            client_secret = token_request.client_secret
 
             # 1.
             if await is_locked_out(
@@ -776,7 +808,7 @@ async def token_endpoint(
                     client_id=client_id, ip=ip, redis_client=redis_client
                 )
                 raise HTTPException(
-                    detail="Invalid client credentials",
+                    detail="Invalid credentials",
                     status_code=status.HTTP_401_UNAUTHORIZED,
                 )
 
@@ -789,13 +821,13 @@ async def token_endpoint(
             allowed_scopes = client_db.scopes
             requested_scopes = await get_least_privileged_scopes(
                 allowed_scopes=list(allowed_scopes),
-                requested_scopes=form.scopes,
+                requested_scopes=token_request.scopes,
                 sub=client_db.client_id,
             )
 
             # 5.
             token = await get_jwt_token(
-                grant_type=form.grant_type,
+                grant_type="client_credentials",
                 passphrase=AUTH_RSA_PASSPHRASE.get_secret_value(),
                 redis_client=redis_client,
                 scopes=requested_scopes,
@@ -820,7 +852,7 @@ async def token_endpoint(
                 token_type="Bearer",
             )
         case "password":
-            username, password = form.username, form.password
+            username, password = token_request.username, token_request.password
 
             # 1.
             if await is_locked_out(ip=ip, redis_client=redis_client, username=username):
@@ -838,7 +870,7 @@ async def token_endpoint(
                     ip=ip, redis_client=redis_client, username=username
                 )
                 raise HTTPException(
-                    detail="Invalid user credentials.",
+                    detail="Invalid credentials.",
                     status_code=status.HTTP_401_UNAUTHORIZED,
                 )
 
@@ -853,17 +885,17 @@ async def token_endpoint(
             )
             requested_scopes = await get_least_privileged_scopes(
                 allowed_scopes=list(allowed_scopes),
-                requested_scopes=form.scopes,
+                requested_scopes=token_request.scopes,
                 sub=user_db.user_id,
             )
 
             # 5.
             access_token = await get_jwt_token(
-                grant_type=form.grant_type,
+                grant_type="password",
                 passphrase=AUTH_RSA_PASSPHRASE.get_secret_value(),
                 redis_client=redis_client,
                 scopes=requested_scopes,
-                sub=str(user_db.user_id),
+                sub=username,
             )
 
             # 6.
@@ -871,7 +903,7 @@ async def token_endpoint(
                 client_id=None,
                 redis_client=request.app.state.redis,
                 scopes=requested_scopes,
-                sub=str(user_db.user_id),
+                sub=username,
             )
 
             # 7.
@@ -908,7 +940,7 @@ async def token_endpoint(
             return response
         case _:
             raise HTTPException(
-                detail=f"Unsupported grant type: {form.grant_type}.",
+                detail=f"Unsupported grant type: {token_request.grant_type}.",
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -920,7 +952,7 @@ async def token_endpoint(
 )
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def refresh_token_endpoint(
-    form: RefreshTokenRequestForm,
+    refresh_token_request: RefreshTokenRequest,
     request: Request,
     csrf_protect: CsrfProtect = Depends(),
     x_csrf_token: str = Header(None, alias="X-CSRF-Token"),  # pylint: disable=W0613
@@ -964,7 +996,7 @@ async def refresh_token_endpoint(
 
     Parameters
     ----------
-    form
+    refresh_token_request
         The form data containing the refresh token to rotate and whether to revoke the
         access token.
     request
@@ -996,9 +1028,11 @@ async def refresh_token_endpoint(
         access_token_expires_in,
         refresh_token_expires_in,
     ) = await rotate_refresh_token(
+        client_id=refresh_token_request.client_id,
         redis_client=request.app.state.redis,
-        refresh_token=form.refresh_token,
-        revoke_access=form.revoke_access,
+        refresh_token=refresh_token_request.refresh_token,
+        revoke_access=refresh_token_request.revoke_access,
+        sub=refresh_token_request.sub,
     )
 
     # 3.
@@ -1040,8 +1074,8 @@ async def refresh_token_endpoint(
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def revoke_token(
     request: Request,
+    revoke_token_request: RevokeTokenRequest,
     claims: dict[str, Any] = require_scopes(required_scopes={"admin"}),
-    token: str = Form(..., description="Access or refresh token to revoke"),
 ) -> RevokeTokenResponse:
     """Revoke a refresh or access token.
 
@@ -1065,8 +1099,9 @@ async def revoke_token(
     claims
         The claims of the authenticated caller, used to verify scopes and grant type.
         This is required to ensure that only authorized users can revoke tokens.
-    token
-        The JWT token to revoke, which can be either an access token or a refresh token.
+    revoke_token_request
+        The request payload containing the token to revoke and the user or client ID
+        to revoke it from.
 
     Returns
     -------
@@ -1076,31 +1111,37 @@ async def revoke_token(
 
     redis_client = request.app.state.redis
     revoked_by = claims["sub"]
+    revoked_from = revoke_token_request.revoke_from
+    token_to_revoke = revoke_token_request.token.strip()
 
     # Try access‑token path first.
     try:
-        claims = jwt.get_unverified_claims(token)
+        claims = jwt.get_unverified_claims(token_to_revoke)
         jti = claims.get("jti")
         if jti:
             await redis_client.delete(REDIS_CACHE_PREFIX_JTI.format(jti=jti))
             return RevokeTokenResponse(
                 revoked_by=revoked_by,
-                revoked_from=claims["sub"],
-                revoked_token=token,
+                revoked_from=revoked_from,
+                revoked_token=token_to_revoke,
                 type="access_token",
             )
     except JWTError:
         pass
 
     # Otherwise treat as refresh token.
-    token_hash = hashlib.sha256(token.encode(), usedforsecurity=True).hexdigest()
+    token_hash = hashlib.sha256(
+        token_to_revoke.encode(), usedforsecurity=True
+    ).hexdigest()
     await redis_client.delete(
-        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(token_hash=token_hash)
+        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(
+            client_id=revoked_from, sub=revoked_from, token_hash=token_hash
+        )
     )
 
     return RevokeTokenResponse(
         revoked_by=revoked_by,
-        revoked_from=None,
-        revoked_token=token,
+        revoked_from=revoked_from,
+        revoked_token=token_to_revoke,
         type="refresh_token",
     )
