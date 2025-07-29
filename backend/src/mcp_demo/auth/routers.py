@@ -745,8 +745,7 @@ async def token_endpoint(
 
     match token_request.grant_type:
         case "authorization_code":
-            input(666)
-            client_id = token_request.client_id or ""
+            client_id = token_request.client_id
             code_plain = token_request.code or ""
             code_verifier = token_request.code_verifier or ""
             redirect_uri = token_request.redirect_uri or ""

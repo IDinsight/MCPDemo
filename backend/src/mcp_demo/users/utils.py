@@ -463,7 +463,7 @@ async def get_user_consents(
     results: list[tuple[str, list[str]]] = []
     for key in keys:
         scopes = json.loads(await redis_client.get(key))
-        client_id = key.decode().split(":")[-1]
+        client_id = key.split(":")[-1]
         results.append((client_id, scopes))
 
     return results
