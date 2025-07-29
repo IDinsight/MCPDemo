@@ -2047,7 +2047,7 @@ async def token_request_form(request: Request) -> TokenRequest:
             scheme, param = get_authorization_scheme_param(
                 request.headers.get("Authorization", "")
             )
-            assert scheme.lower() == "basic"
+            assert scheme.lower() == "basic", f"{scheme = }"
             try:
                 client_id, client_secret = b64decode(param).decode().split(":", 1)
             except ValueError:  # pragma: no cover

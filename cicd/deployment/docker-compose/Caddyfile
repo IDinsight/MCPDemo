@@ -9,6 +9,8 @@
 			header_up  X-Real-IP       {remote_host}   # A common header used by many frameworks to detect user IP
 			header_up  X-Forwarded-Proto {scheme}      # Tells backend whether the original request was HTTP or HTTPS
 
+            header_up  Authorization {>Authorization}  # Allow client credentials for OAuth flows
+
             transport http {
                 dial_timeout 100s
                 read_timeout 100s
