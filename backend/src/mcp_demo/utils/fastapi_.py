@@ -5,14 +5,13 @@ import os
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable
+from typing import AsyncIterator, Callable
 
 # Third Party Library
 import sentry_sdk
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response
 from fastapi_csrf_protect import CsrfProtect
 from fastapi_csrf_protect.exceptions import CsrfProtectError
@@ -180,57 +179,6 @@ async def csrf_protect_exception_handler(
     )
 
 
-def custom_openapi(*, app: FastAPI) -> dict[str, Any]:
-    """Inject OAuth 2.1 authorization code flow into the generated schema (before the
-    Swagger UI is rendered).
-
-    Parameters
-    ----------
-    app
-        The FastAPI application instance.
-
-    Returns
-    -------
-    dict[str, Any]
-        The OpenAPI schema with the OAuth 2.1 authorization code flow added.
-    """
-
-    if app.openapi_schema:  # Return cached value
-        return app.openapi_schema
-
-    openapi_schema = get_openapi(
-        description="MCP Demo APIs",
-        routes=app.routes,
-        title=app.title,
-        version="1.0.0",
-    )
-
-    openapi_schema.setdefault("components", {}).setdefault("securitySchemes", {})[
-        "OAuth2AuthorizationCode"
-    ] = {
-        "flows": {
-            "authorizationCode": {
-                "authorizationUrl": (
-                    f"http://{CADDY_DOMAIN_NAME}:{FASTAPI_PORT}{CADDY_BACKEND_ROOT_API}/auth/authorize"
-                ),
-                "tokenUrl": (
-                    f"http://{CADDY_DOMAIN_NAME}:{FASTAPI_PORT}{CADDY_BACKEND_ROOT_API}/auth/token"
-                ),
-                "scopes": {
-                    "admin": "Admin",
-                    "read": "Read data",
-                    "write": "Write data",
-                },
-            }
-        },
-        "type": "oauth2",
-    }
-
-    app.openapi_schema = openapi_schema  # Cache for future calls
-
-    return app.openapi_schema
-
-
 @CsrfProtect.load_config
 def get_csrf_config() -> CSRFSettings:
     """Load CSRF configuration for the FastAPI application.
@@ -298,9 +246,6 @@ async def lifespan_fastapi(app: FastAPI) -> AsyncIterator[None]:
 
         # 2.
         app.state.limiter = limiter
-
-        # 3.
-        app.openapi_schema = custom_openapi(app=app)
 
         # 3.
         logger.log("CELEBRATE", "Ready to roll! 🚀")

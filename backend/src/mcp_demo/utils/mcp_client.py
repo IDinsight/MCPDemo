@@ -13,13 +13,15 @@ from loguru import logger
 from mcp_demo.config import Settings
 
 
-def get_access_token(*, auth_type: str = "bearer", password: str, username: str) -> str:
+def get_access_token(
+    *, grant_type: str = "password", password: str, username: str
+) -> str:
     """Get the access token for the client.
 
     Parameters
     ----------
-    auth_type
-        The type of authentication to use. Options are "bearer" or "oauth".
+    grant_type
+        The grant type to use. Options are "password", "client_credentials", or "pkce".
     password
         The password for the MCP client authentication.
     username
@@ -44,27 +46,23 @@ def get_access_token(*, auth_type: str = "bearer", password: str, username: str)
     # Prod (through Caddy).
     # url = "https://api.example.com/api/auth/token"
 
-    match auth_type:
-        case "bearer":
+    match grant_type:
+        case "password":
             payload = {
-                "client_id": username,
-                "client_secret": password,
                 "grant_type": "password",
                 "password": password,
                 "username": username,
             }
-        case "oauth":
+        case "client_credentials":
             payload = {
                 "client_id": username,
                 "client_secret": password,
                 "grant_type": "client_credentials",
-                "password": password,
-                "username": username,
             }
         case _:
             raise ValueError(
-                f"Unsupported authentication type: {auth_type}. "
-                f"Valid options are 'bearer' or 'oauth'."
+                f"Unsupported grant type: {grant_type}. "
+                f"Valid options are 'password', 'client_credentials', or 'pkce'."
             )
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     response = requests.post(url, data=payload, headers=headers, timeout=60)
@@ -83,7 +81,7 @@ def get_access_token(*, auth_type: str = "bearer", password: str, username: str)
 
 def get_mcp_config(
     *,
-    auth_type: str,
+    grant_type: str,
     host: str,
     include_external_servers: bool = False,
     password: str,
@@ -96,8 +94,9 @@ def get_mcp_config(
 
     Parameters
     ----------
-    auth_type
-        The type of authentication to use. Options are "bearer" or "oauth".
+    grant_type
+        The grant type to use for authentication. Options are "password",
+        "client_credentials", or "pkce".
     host
         The host address for the MCP client.
     include_external_servers
@@ -125,14 +124,14 @@ def get_mcp_config(
         If an unsupported authentication type is provided.
     """
 
-    if auth_type not in ["bearer", "oauth"]:
+    if grant_type not in ["password", "client_credentials", "pkce"]:
         raise ValueError(
-            f"Unsupported authentication type: {auth_type}. "
-            f"Valid options are 'bearer' or 'oauth'."
+            f"Unsupported grant type: {grant_type}. "
+            f"Valid options are 'password', 'client_credentials', or 'pkce'."
         )
 
     access_token = get_access_token(
-        auth_type=auth_type, password=password, username=username
+        grant_type=grant_type, password=password, username=username
     )
     server_config = {
         "main_server": RemoteMCPServer(

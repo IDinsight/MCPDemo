@@ -1,23 +1,29 @@
-"""This module contains FastAPI routers for user endpoints."""
+"""This module contains FastAPI routers for user and user consent endpoints.
+
+Since user content is tied to the user, consent endpoints are also defined in this
+module.
+"""
 
 # Standard Library
-from typing import Annotated
+from typing import Annotated, Any
 
 # Third Party Library
 import sqlalchemy
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Package Library
-from mcp_demo.auth.utils import require_scopes
+from mcp_demo.auth.utils import require_scopes, revoke_refresh_tokens_for_grant
 from mcp_demo.config import Settings
 from mcp_demo.scopes.schemas import ScopeAssign, ScopeCreate, ScopeResponse
 from mcp_demo.scopes.utils import add_scope_to_db, check_if_scope_exists
 from mcp_demo.users.models import UserDB
 from mcp_demo.users.schemas import (
+    ConsentCreate,
+    ConsentInfo,
     UserCreateWithPassword,
     UserCreateWithRecoveryCodes,
     UserDeleteResponse,
@@ -30,11 +36,14 @@ from mcp_demo.users.utils import (
     check_if_user_exists,
     check_if_users_exist,
     delete_scope_from_user,
+    delete_user_consent,
     delete_user_from_db,
     get_current_user,
     get_user_by_id,
+    get_user_consents,
     get_user_scopes_by_id,
     reset_user_password,
+    save_user_consent,
     save_user_to_db,
     verify_recovery_code,
 )
@@ -134,11 +143,134 @@ async def add_new_user(
     )
 
     return UserCreateWithRecoveryCodes(
-        created_by=int(claims["sub"]),
+        created_by=claims["sub"],
         recovery_codes=recovery_codes,
         scopes=added_scopes,
         user_id=user_db.user_id,
         username=user_db.username,
+    )
+
+
+@router.post(
+    "/consents",
+    response_model=ConsentInfo,
+    status_code=status.HTTP_201_CREATED,
+    summary="Grant or update user consent for a client",
+)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
+async def grant_user_consent(
+    request: Request,
+    claims: dict[str, Any] = require_scopes(
+        required_scopes=set()
+    ),  # Only needs authentication
+    payload: ConsentCreate = Body(...),
+) -> ConsentInfo:
+    """Save resource-owner --> client consent so that the `auth/authorize` endpoint can
+    skip UI-based consent form.
+
+    Call this endpoint once **before** hitting the `auth/authorize` endpoint the first
+    time with a given client ID/scope set. Subsequent authorizations will re-use the
+    stored consent.
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object.
+    claims
+        The claims of the authenticated user, used to verify the user's identity.
+    payload
+        The consent information to save, including the client ID and scopes.
+
+    Returns
+    -------
+    ConsentInfo
+        The consent information that was saved, including the client ID and scopes.
+    """
+
+    await save_user_consent(
+        client_id=payload.client_id,
+        redis_client=request.app.state.redis,
+        scopes=payload.scopes,
+        sub=str(claims["sub"]),
+    )
+
+    return ConsentInfo(client_id=payload.client_id, scopes=payload.scopes)
+
+
+@router.get(
+    "/consents",
+    response_model=list[ConsentInfo],
+    summary="List all consents granted by the current user",
+)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
+async def list_user_consents(
+    request: Request, claims: dict[str, Any] = require_scopes(required_scopes=set())
+) -> list[ConsentInfo]:
+    """Return a list of all consents granted by the current user.
+
+    Parameters
+    ----------
+    request
+        The FastAPI request object.
+    claims
+        The claims of the authenticated user, used to verify the user's identity.
+
+    Returns
+    -------
+    list[ConsentInfo]
+        A list of consent information objects, each containing the client ID and scopes
+        for which the user has granted consent.
+    """
+
+    rows = await get_user_consents(
+        redis_client=request.app.state.redis, sub=str(claims["sub"])
+    )
+
+    return [ConsentInfo(client_id=cid, scopes=scopes) for cid, scopes in rows]
+
+
+@router.delete(
+    "/consents/{client_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Revoke consent for a specific client",
+)
+@limiter.limit(RATE_LIMIT_LOGIN_RATE)
+async def revoke_user_consent(
+    client_id: str,
+    request: Request,
+    claims: dict = require_scopes(required_scopes=set()),
+) -> None:
+    """Delete the user consent record. Subsequent calls to `auth/authorize` will fail
+    until the user grants consent again.
+
+    NB: After revoking consent, pre-issued access/refresh tokens will keep working
+    until their natural expiration time. This is because access/refresh tokens are
+    bearer tokens---a resource server validate them offline (JWT) or cache the
+    introspection result. The OAuth spec only specifies that the server **may** revoke
+    tokens. Revoking consent only stops **new** tokens from being issued; old tokens
+    live until expiry or manual revocation. Thus, this endpoint also revokes all
+    **refresh** tokens issued by the user for the given client ID. Access tokens remain
+    valid until their natural expiration time (they are short-lived).
+
+    Parameters
+    ----------
+    client_id
+        The client ID for which to revoke consent.
+    request
+        The FastAPI request object.
+    claims
+        The claims of the authenticated user, used to verify the user's identity.
+    """
+
+    sub = str(claims["sub"])
+
+    await delete_user_consent(
+        client_id=client_id,
+        redis_client=request.app.state.redis,
+        sub=sub,
+    )
+    await revoke_refresh_tokens_for_grant(
+        client_id=client_id, redis_client=request.app.state.redis, sub=sub
     )
 
 
@@ -182,7 +314,7 @@ async def add_user_scope(
     )
 
     return ScopeResponse(
-        created_by=int(claims["sub"]), scopes=added_scopes, user_id=user_db.user_id
+        created_by=claims["sub"], scopes=added_scopes, user_id=user_db.user_id
     )
 
 
@@ -325,7 +457,7 @@ async def register_first_user(
     )
 
     return UserCreateWithRecoveryCodes(
-        created_by=user_db.user_id,
+        created_by=user_db.username,
         recovery_codes=recovery_codes,
         scopes=added_scopes,
         user_id=user_db.user_id,

@@ -6,7 +6,7 @@ Any configurations added to backend/.env should be added to `BackendSettings` as
 # Standard Library
 import os
 
-from typing import Literal, Optional
+from typing import Final, Literal, Optional
 
 # Third Party Library
 from pydantic import Field, SecretStr
@@ -20,8 +20,8 @@ class BackendSettings(BaseSettings):
     AUTH_ALLOWED_SCOPES: set[str] = {"admin", "read", "write"}
     AUTH_AUDIENCE: str = "MCP_Demo_Server"
     AUTH_CODE_TTL: int = 300  # Five‑minute max, well below the 10‑min spec. limit
-    AUTH_CODE_VERIFIER_MAX_LEN: int = 128
-    AUTH_CODE_VERIFIER_MIN_LEN: int = 43
+    AUTH_CODE_VERIFIER_MAX_LEN: Final[int] = 128
+    AUTH_CODE_VERIFIER_MIN_LEN: Final[int] = 43
     AUTH_FILELOCK_TIMEOUT: int = 2
     AUTH_JWK_ALGORITHM: str = "RS256"
     AUTH_JWKS_FN: str = "jwks.json"
@@ -39,6 +39,9 @@ class BackendSettings(BaseSettings):
     AUTH_TOKEN_ISSUER: str = "https://tokens.local"
     AUTH_TOKEN_REFRESH_TTL: int = 60 * 60 * 24 * 30  # 30 days
     AUTH_TOKEN_TTL: int = 900  # 15 minutes
+
+    # Clients
+    CLIENTS_DEFAULT_ID: Final[str] = "first_party"  # ROPC token (no external client)
 
     # Cross-Site Request Forgery (CSRF)
     CSRF_SECRET_KEY: SecretStr = Field(
@@ -90,13 +93,18 @@ class BackendSettings(BaseSettings):
     REDIS_CACHE_PREFIX_LOCK_USER: str = "lock:{username}:{ip}"
     REDIS_CACHE_PREFIX_LOGIN_FAIL_CLIENT: str = "login_fail:{client_id}:{ip}"
     REDIS_CACHE_PREFIX_LOGIN_FAIL_USER: str = "login_fail:{username}:{ip}"
-    REDIS_CACHE_PREFIX_REFRESH_TOKEN: str = "auth:refresh:{token_hash}"
+    REDIS_CACHE_PREFIX_REFRESH_TOKEN: str = (
+        "auth:refresh:{sub}:{client_id}:{token_hash}"
+    )
     REDIS_CACHE_PREFIX_SUB_JTIS: str = "auth:sub_jtis:{grant_type}:{sub}"
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
 
     # Sentry
     SENTRY_DSN: Optional[str] = None
     SENTRY_TRACES_SAMPLE_RATE: float = 1.0
+
+    # Users
+    USERS_CONSENT_KEY_TEMPLATE: Final[str] = "consent:{sub}:{client_id}"
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="allow"

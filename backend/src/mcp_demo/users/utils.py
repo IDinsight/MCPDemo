@@ -1,6 +1,12 @@
-"""This module contains utilities for users."""
+"""This module contains utilities for users and user consent.
+
+Since user content is tied to the user, consent utilities are also defined in this
+module.
+"""
 
 # Standard Library
+import json
+
 from datetime import datetime, timezone
 from typing import Any
 
@@ -8,6 +14,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import SecurityScopes
 from loguru import logger
+from redis import asyncio as aioredis
 from sqlalchemy import delete, select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +30,7 @@ from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.general import generate_hash, generate_random_string, verify_hash
 
 AUTH_ALLOWED_SCOPES = Settings.AUTH_ALLOWED_SCOPES
+USERS_CONSENT_KEY_TEMPLATE = Settings.USERS_CONSENT_KEY_TEMPLATE
 
 
 class UserAlreadyExistsError(Exception):
@@ -236,6 +244,25 @@ async def delete_scope_from_user(
     return user_db
 
 
+async def delete_user_consent(
+    *, client_id: str, redis_client: aioredis.Redis, sub: str
+) -> None:
+    """Delete user consent for a client ID and scopes from Redis.
+
+    Parameters
+    ----------
+    client_id
+        The client ID for which the user has granted consent.
+    redis_client
+        The Redis client to use for deleting the consent information.
+    sub
+        The subject identifier (sub) of the user, typically their user ID.
+    """
+
+    key = USERS_CONSENT_KEY_TEMPLATE.format(client_id=client_id, sub=sub)
+    await redis_client.delete(key)
+
+
 async def delete_user_from_db(*, asession: AsyncSession, user_id: int) -> None:
     """Delete a user from the database.
 
@@ -301,7 +328,7 @@ async def get_current_user(
     )
 
     try:
-        user_db = await get_user_by_id(asession=asession, user_id=int(payload["sub"]))
+        user_db = await get_user_by_username(asession=asession, username=payload["sub"])
     except UserNotFoundError as exc:
         raise HTTPException(
             detail="Could not validate credentials",
@@ -385,6 +412,63 @@ async def get_user_by_username(*, asession: AsyncSession, username: str) -> User
         ) from err
 
 
+async def get_user_consent(
+    *, client_id: str, redis_client: aioredis.Redis, sub: str
+) -> list[str] | None:
+    """Retrieve user consent for a client ID and scopes from Redis.
+
+    Parameters
+    ----------
+    client_id
+        The client ID for which the user has granted consent.
+    redis_client
+        The Redis client to use for retrieving the consent information.
+    sub
+        The subject identifier (sub) of the user, typically their user ID.
+
+    Returns
+    -------
+    list[str] | None
+        A list of scope names that the user has consented to, or `None` if no consent
+        exists for the specified client ID and user.
+    """
+
+    key = USERS_CONSENT_KEY_TEMPLATE.format(client_id=client_id, sub=sub)
+    raw = await redis_client.get(key)
+
+    return [] if raw is None else json.loads(raw)
+
+
+async def get_user_consents(
+    *, redis_client: aioredis.Redis, sub: str
+) -> list[tuple[str, list[str]]]:
+    """Return a list of user consents for a given subject identifier (sub).
+
+    Parameters
+    ----------
+    redis_client
+        The Redis client to use for retrieving the consent information.
+    sub
+        The subject identifier (sub) of the user, typically their user ID.
+
+    Returns
+    -------
+    list[tuple[str, list[str]]]
+        A list of tuples, each containing a client ID and a list of scope names that
+        the user has consented to for that client ID.
+    """
+
+    pattern = USERS_CONSENT_KEY_TEMPLATE.format(client_id="*", sub=sub)
+    keys = await redis_client.keys(pattern)
+    results: list[tuple[str, list[str]]] = []
+    for key in keys:
+        scopes = json.loads(await redis_client.get(key))
+        client_id = key.decode().split(":")[-1]
+        results.append((client_id, scopes))
+
+    return results
+
+
 async def get_user_scopes_by_id(*, asession: AsyncSession, user_id: int) -> set[str]:
     """Get the scopes of a user.
 
@@ -440,6 +524,27 @@ async def reset_user_password(
     await asession.refresh(user_db)
 
     return user_db
+
+
+async def save_user_consent(
+    *, client_id: str, redis_client: aioredis.Redis, scopes: list[str], sub: str
+) -> None:
+    """Save user consent for a client ID and scopes in Redis.
+
+    Parameters
+    ----------
+    client_id
+        The client ID for which the user has granted consent.
+    redis_client
+        The Redis client to use for storing the consent information.
+    scopes
+        A list of scope names that the user has consented to.
+    sub
+        The subject identifier (sub) of the user, typically their user ID.
+    """
+
+    key = USERS_CONSENT_KEY_TEMPLATE.format(client_id=client_id, sub=sub)
+    await redis_client.set(key, json.dumps(scopes, separators=(",", ":")))
 
 
 async def save_user_to_db(

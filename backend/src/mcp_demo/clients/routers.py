@@ -160,14 +160,14 @@ async def register_first_client(
 
     Returns
     -------
-    UserCreateWithRecoveryCodes
-        The user object with the recovery codes.
+    OAuth2ClientResponse
+        The persisted client with `client_id`, `scopes`, and `is_active` fields.
 
     Raises
     ------
     HTTPException
-        If the username already exists.
-        If the authenticated user does not have permission to create users.
+        If clients already exist in the database, indicating that this endpoint should
+        not be called again.
     """
 
     # 1.
@@ -197,7 +197,7 @@ async def register_first_client(
     "/{client_id}", response_model=OAuth2ClientResponse, summary="Get client details"
 )
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
-async def get_user(
+async def get_client(
     calling_client_db: Annotated[Oauth2ClientDB, Depends(get_current_client)],
     request: Request,  # pylint: disable=W0613
     client_id: str,

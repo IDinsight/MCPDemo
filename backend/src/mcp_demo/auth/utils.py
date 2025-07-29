@@ -60,6 +60,7 @@ import os
 import secrets
 import time
 
+from base64 import b64decode
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from pathlib import Path
@@ -78,11 +79,13 @@ from cryptography.hazmat.primitives.serialization import (
 )
 from fastapi import Depends, Form, HTTPException, Request, Security, status
 from fastapi.openapi.models import (
+    OAuthFlowAuthorizationCode,
     OAuthFlowClientCredentials,
     OAuthFlowPassword,
     OAuthFlows,
 )
 from fastapi.security import OAuth2
+from fastapi.security.utils import get_authorization_scheme_param
 from filelock import FileLock
 from jose import JWTError, jwk, jwt
 from loguru import logger
@@ -123,6 +126,7 @@ AUTH_RSA_PUBLIC_EXPONENT = Settings.AUTH_RSA_PUBLIC_EXPONENT
 AUTH_TOKEN_ISSUER = Settings.AUTH_TOKEN_ISSUER
 AUTH_TOKEN_REFRESH_TTL = Settings.AUTH_TOKEN_REFRESH_TTL
 AUTH_TOKEN_TTL = Settings.AUTH_TOKEN_TTL
+CLIENTS_DEFAULT_ID = Settings.CLIENTS_DEFAULT_ID
 REDIS_CACHE_PREFIX_AUTH_CODE = Settings.REDIS_CACHE_PREFIX_AUTH_CODE
 REDIS_CACHE_PREFIX_JTI = Settings.REDIS_CACHE_PREFIX_JTI
 REDIS_CACHE_PREFIX_JWKS_CURRENT = Settings.REDIS_CACHE_PREFIX_JWKS_CURRENT
@@ -132,90 +136,56 @@ REDIS_CACHE_PREFIX_REFRESH_TOKEN = Settings.REDIS_CACHE_PREFIX_REFRESH_TOKEN
 oauth_2_multi_scheme = OAuth2(
     auto_error=False,  # Do not raise 401 automatically, we handle it manually
     flows=OAuthFlows(
-        clientCredentials=OAuthFlowClientCredentials(
+        authorizationCode=OAuthFlowAuthorizationCode(
+            authorizationUrl="/auth/authorize",  # must be absolute in production
+            tokenUrl="/auth/token",
             scopes={
+                "admin": "Admin access",
                 "read": "Read access",
                 "write": "Write access",
+            },
+        ),
+        clientCredentials=OAuthFlowClientCredentials(
+            scopes={
                 "admin": "Admin access",
+                "read": "Read access",
+                "write": "Write access",
             },
             tokenUrl="/auth/token",
         ),
-        password=OAuthFlowPassword(tokenUrl="auth/token"),  # No leading slash here!
+        password=OAuthFlowPassword(
+            scopes={
+                "admin": "Admin access",
+                "read": "Read access",
+                "write": "Write access",
+            },
+            tokenUrl="auth/token",  # No leading slash here!
+        ),
     ),
     scheme_name="OAuth2MultiScheme",  # Label that appears in Swagger-UI
 )
 
 
-class ClientCredentialsRequestForm:
-    """Form model supporting both 'client_credentials' and 'password' grant types.
-
-    NB: FastAPI’s built-in OAuth2 forms don’t support multi-grant flows.
-    """
+class AuthorizationCodeRequestForm:
+    """Form model for Authorization Code + PKCE grant type."""
 
     def __init__(
         self,
         *,
-        client_id: str | None = Form(None, min_length=1),
-        client_secret: str | None = Form(None, min_length=1),
-        grant_type: str = Form(
-            ...,
-            description="Either client_credentials or password",
-            regex="^(client_credentials|password)$",
-        ),
-        password: str | None = Form(None, min_length=1),
-        scope: str = Form(default="", description="Space separated list of scopes"),
-        username: str | None = Form(None, min_length=1),
+        client_id: Optional[str] = Form(None),
+        client_secret: Optional[str] = Form(None),
+        code: str = Form(...),
+        code_verifier: str = Form(..., min_length=43, max_length=128),
+        redirect_uri: str = Form(...),
     ) -> None:
-        """
+        """Initialize the form with required fields for authorization code flow.
 
         Parameters
         ----------
         client_id
             The client identifier issued to the client during registration.
         client_secret
-            The client secret issued to the client during registration. This is used to
-            authenticate the client and should be kept confidential.
-        grant_type
-            The OAuth2 grant type, must be 'client_credentials'.
-        password
-            The password of the user for password grant type. Optional, only used for
-            password grant.
-        scope
-            Space-separated list of scopes requested by the client. This parameter
-            allows users/clients to "scope down".
-        username
-            The username of the user for password grant type. Optional, only used for
-            password grant.
-
-        Raises
-        ------
-        ValueError
-            If the required fields for the specified grant type are not provided.
-        """
-
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.grant_type = grant_type
-        self.password = password
-        self.scopes: list[str] = scope.split()
-        self.username = username
-
-
-class AuthorizationCodeRequestForm(ClientCredentialsRequestForm):
-    """Form model for authorization + PKCE grant type."""
-
-    def __init__(
-        self,
-        *,
-        code: str = Form(...),
-        code_verifier: str = Form(..., min_length=43, max_length=128),
-        redirect_uri: str = Form(...),
-        **kwargs: Any,
-    ) -> None:
-        """Initialize the form with required fields for authorization code flow.
-
-        Parameters
-        ----------
+            The client secret issued to the client during registration.
         code
             The authorization code received from the authorization server after user
             authorization. This code is used to exchange for an access token.
@@ -226,18 +196,94 @@ class AuthorizationCodeRequestForm(ClientCredentialsRequestForm):
             The URI to which the authorization server will redirect the user after
             authorization. This must match one of the pre-registered redirect URIs for
             the client.
-        kwargs
-            Additional keyword arguments for `ClientCredentialsRequestForm`.
         """
 
-        super().__init__(scope=kwargs.pop("scope", ""), **kwargs)
-
+        self.client_id = client_id
+        self.client_secret = client_secret
         self.code = code
         self.code_verifier = code_verifier
+        self.grant_type = "authorization_code"
         self.redirect_uri = redirect_uri
+        self.scopes: list[str] = []  # Always empty for auth-code exchange
 
 
-TokenRequest = AuthorizationCodeRequestForm | ClientCredentialsRequestForm
+class ClientCredentialsRequestForm:
+    """Form model supporting both Client Credentials grant type."""
+
+    def __init__(
+        self,
+        *,
+        client_id: str = Form(..., min_length=1, max_length=128),
+        client_secret: str = Form(..., min_length=1, max_length=128),
+        scope: str = Form(
+            "",
+            description="Space-separated list of scopes requested by the resource owner. ",
+        ),
+    ) -> None:
+        """
+
+        Parameters
+        ----------
+        client_id
+            The client identifier issued to the client during registration.
+        client_secret
+            The client secret issued to the client during registration.
+        scope
+            Space-separated list of scopes requested by the client. This parameter
+            allows clients to "scope down".
+
+        Raises
+        ------
+        ValueError
+            If the required fields for the specified grant type are not provided.
+        """
+
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.grant_type = "client_credentials"
+        self.scopes: list[str] = scope.split()
+
+
+class ResourceOwnerPasswordCredentialsRequestForm:
+    """Form model for Resource Owner Password Credentials (ROPC) grant type."""
+
+    def __init__(
+        self,
+        *,
+        password: str = Form(..., min_length=8, max_length=128),
+        scope: str = Form(
+            "",
+            description="Space-separated list of scopes requested by the resource owner. ",
+        ),
+        username: str = Form(..., min_length=1, max_length=128),
+    ) -> None:
+        """
+
+        Parameters
+        ----------
+        password
+            The password of the user. This is used to authenticate the user and should
+            be kept confidential.
+        scope
+            Space-separated list of scopes requested by the resource owner. This
+            parameter allows resource owners to "scope down" the access granted by the
+            token.
+        username
+            The username of the user. This is used to identify the user in the system.
+            It should be unique and is typically an email address or a username.
+        """
+
+        self.grant_type = "password"
+        self.password = password
+        self.scopes: list[str] = scope.split()
+        self.username = username
+
+
+TokenRequest = (
+    AuthorizationCodeRequestForm
+    | ClientCredentialsRequestForm
+    | ResourceOwnerPasswordCredentialsRequestForm
+)
 
 
 def _build_keys_by_kid(*, new_jwks: dict[str, Any]) -> dict[str, Any]:
@@ -381,7 +427,12 @@ async def _store_authorization_code(
 
 
 async def _store_refresh_token(
-    *, payload: dict[str, Any], redis_client: aioredis.Redis, token_plain: str
+    *,
+    client_id: str,
+    payload: dict[str, Any],
+    redis_client: aioredis.Redis,
+    sub: str,
+    token_plain: str,
 ) -> None:
     """Hash and persist a one‑time refresh token.
 
@@ -392,18 +443,25 @@ async def _store_refresh_token(
 
     Parameters
     ----------
+    client_id
+        The client ID for which the refresh token is being generated.
     payload
         The payload to store in Redis, typically containing user information and
         token metadata.
     redis_client
         The Redis client used to store the refresh token.
+    sub
+        The subject for which the refresh token is being generated, typically a user ID
+        or client ID.
     token_plain
         The plain text refresh token to hash and store. This is the token that will be
         used to refresh the access token in the future.
     """
 
     token_hash = hashlib.sha256(token_plain.encode(), usedforsecurity=True).hexdigest()
-    key = REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(token_hash=token_hash)
+    key = REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(
+        client_id=client_id, sub=sub, token_hash=token_hash
+    )
 
     await redis_client.set(
         ex=AUTH_TOKEN_REFRESH_TTL,
@@ -465,7 +523,7 @@ async def _verify_caller(
     """
 
     credentials_exception = HTTPException(
-        detail="Could not validate client credentials",
+        detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
         status_code=status.HTTP_401_UNAUTHORIZED,
     )
@@ -676,8 +734,15 @@ async def generate_refresh_token(
         "sub": sub,
     }
 
+    print(f"{client_id = }")
+    print(f"{sub = }")
+    input(111)
     await _store_refresh_token(
-        payload=payload, redis_client=redis_client, token_plain=refresh_token
+        client_id=client_id or CLIENTS_DEFAULT_ID,
+        payload=payload,
+        redis_client=redis_client,
+        sub=sub,
+        token_plain=refresh_token,
     )
 
     return refresh_token, AUTH_TOKEN_REFRESH_TTL
@@ -1447,6 +1512,36 @@ def require_scopes(*, required_scopes: set[str]) -> Callable[..., Any]:
     return Depends(scope_checker)
 
 
+async def revoke_refresh_tokens_for_grant(
+    *, client_id: str, redis_client: aioredis.Redis, sub: str
+) -> None:
+    """Revoke all tokens associated with a given client ID and subject (sub).
+
+    This function deletes all refresh tokens and JWT IDs (jti) associated with the
+    specified client ID and subject. It is typically used when a user revokes consent
+    for a client application, ensuring that all tokens issued to that client are no
+    longer valid.
+
+    Parameters
+    ----------
+    client_id
+        The client ID for which the tokens should be revoked. This is used to identify
+        the client application whose tokens are being revoked.
+    redis_client
+        The Redis client.
+    sub
+        The subject (user ID) for which the tokens should be revoked. This is used to
+        identify the user whose tokens are being revoked.
+    """
+
+    pattern = REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(
+        client_id=client_id, sub=sub, token_hash="*"
+    )
+    keys = await redis_client.keys(pattern)
+    if keys:
+        await redis_client.delete(*keys)
+
+
 async def rotate_keys(
     *,
     jwks_fn: str = AUTH_JWKS_FN,
@@ -1702,9 +1797,11 @@ async def rotate_keys_with_redis(
 
 async def rotate_refresh_token(
     *,
+    client_id: str | None,
     redis_client: aioredis.Redis,
     refresh_token: str,
     revoke_access: bool,
+    sub: str,
 ) -> tuple[str, str, int, int]:
     """Exchange a still‑valid refresh token for a fresh access and refresh token pair.
     Also implements refresh‑token rotation---old refresh token is deleted immediately.
@@ -1714,6 +1811,8 @@ async def rotate_refresh_token(
 
     Parameters
     ----------
+    client_id
+        The client ID that requested the refresh token.
     redis_client
         The Redis client used to fetch and store the refresh token.
     refresh_token
@@ -1724,6 +1823,8 @@ async def rotate_refresh_token(
         If True, all outstanding access tokens for the subject of the refresh token
         will be revoked (deleted). This is useful for security purposes, such as when
         a user/client logs out or changes their password/client secret.
+    sub
+        The subject (user ID) for which the refresh token is being exchanged.
 
     Returns
     -------
@@ -1733,7 +1834,10 @@ async def rotate_refresh_token(
     """
 
     payload = await verify_refresh_token(
-        redis_client=redis_client, refresh_token=refresh_token
+        client_id=client_id,
+        redis_client=redis_client,
+        refresh_token=refresh_token,
+        sub=sub,
     )
     grant_type = payload["grant_type"]
     scopes = payload["scope"].split()
@@ -1745,7 +1849,9 @@ async def rotate_refresh_token(
         refresh_token.encode(), usedforsecurity=True
     ).hexdigest()
     await redis_client.delete(
-        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(token_hash=refresh_token_hash)
+        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(
+            client_id=client_id, sub=sub, token_hash=refresh_token_hash
+        )
     )
 
     # Delete every outstanding access token belonging to this subject.
@@ -1905,6 +2011,11 @@ async def token_request_form(request: Request) -> TokenRequest:
     `client_id`, `redirect_uri`, and `code_verifier` but no scope field is required (or
     even allowed).
 
+    NB: In the Client Credentials flow, the only required secrets belong to the client,
+    and the spec mandates putting them in the Basic header — Swagger follows that rule,
+    leaving the body nearly empty. Thus, we extract the client ID and secret from the
+    Basic auth header, and the body only contains the `grant_type` and `scope` fields.
+
     Parameters
     ----------
     request
@@ -1920,34 +2031,60 @@ async def token_request_form(request: Request) -> TokenRequest:
     ------
     HTTPException
         If the `grant_type` is unsupported or missing.
+    ValueError
+        If the Basic auth header is malformed or cannot be decoded.
     """
 
     form = await request.form()
-    grant_type = form.get("grant_type")
+    form_dict = cast(dict[str, str], dict(form))
+    grant_type = form_dict.pop("grant_type")
+    form_dict["scope"] = form_dict.get("scope", "").strip()
 
-    if grant_type == "authorization_code":
-        return AuthorizationCodeRequestForm(**form)
-    if grant_type in ["client_credentials", "password"]:
-        return ClientCredentialsRequestForm(**form)
-
-    raise HTTPException(
-        detail="Unsupported or missing grant type.",
-        status_code=status.HTTP_400_BAD_REQUEST,
-    )
+    match grant_type:
+        case "authorization_code":
+            return AuthorizationCodeRequestForm(**form_dict)
+        case "client_credentials":
+            scheme, param = get_authorization_scheme_param(
+                request.headers.get("Authorization", "")
+            )
+            assert scheme.lower() == "basic"
+            try:
+                client_id, client_secret = b64decode(param).decode().split(":", 1)
+            except ValueError:  # pragma: no cover
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Malformed Basic auth header.",
+                ) from None
+            return ClientCredentialsRequestForm(
+                client_id=client_id,
+                client_secret=client_secret,
+                scope=form_dict["scope"],
+            )
+        case "password":
+            return ResourceOwnerPasswordCredentialsRequestForm(**form_dict)
+        case _:
+            raise HTTPException(
+                detail="Unsupported or missing grant type.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 async def verify_refresh_token(
-    *, redis_client: aioredis.Redis, refresh_token: str
+    *, client_id: str | None, redis_client: aioredis.Redis, refresh_token: str, sub: str
 ) -> dict[str, Any]:
     """Return stored payload or raise exception if token is unknown/expired.
 
     Parameters
     ----------
+    client_id
+        The client ID for which the refresh token was issued.
     redis_client
         The Redis client used to fetch the refresh token.
     refresh_token
         The refresh token to verify. This is a long-lived token used to obtain new
         access tokens without requiring the user to re-authenticate.
+    sub
+        The subject (user ID) for which the refresh token was issued.
 
     Returns
     -------
@@ -1967,7 +2104,9 @@ async def verify_refresh_token(
     ).hexdigest()
 
     raw = await redis_client.get(
-        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(token_hash=token_hash)
+        REDIS_CACHE_PREFIX_REFRESH_TOKEN.format(
+            client_id=client_id or CLIENTS_DEFAULT_ID, sub=sub, token_hash=token_hash
+        )
     )
 
     if not raw:

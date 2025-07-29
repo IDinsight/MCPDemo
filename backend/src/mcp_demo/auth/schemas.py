@@ -37,11 +37,28 @@ class LoginRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class RefreshTokenRequestForm(BaseModel):
+class RefreshTokenRequest(BaseModel):
     """Pydantic model for refresh token request."""
 
-    refresh_token: str = Field(..., min_length=80)
+    client_id: str | None = Field(None, description="Public client identifier")
+    refresh_token: str = Field(
+        ..., description="The refresh token to rotate", min_length=80
+    )
     revoke_access: bool = False  # Set to True to revoke all old access tokens
+    sub: str = Field(..., min_length=1)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RevokeTokenRequest(BaseModel):
+    """Pydantic model for revoke token request."""
+
+    revoke_from: str = Field(
+        ..., description="The username or client ID to revoke the token from"
+    )
+    token: str = Field(
+        ..., description="Either an access or refresh token to revoke", min_length=80
+    )
 
     model_config = ConfigDict(from_attributes=True)
 

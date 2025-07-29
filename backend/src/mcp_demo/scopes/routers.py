@@ -20,6 +20,7 @@ from mcp_demo.scopes.utils import (
     delete_scope_from_db,
     get_all_scopes_with_users,
 )
+from mcp_demo.users.utils import get_user_by_username
 from mcp_demo.utils.database import get_async_session
 
 TAG_METADATA = {"description": "Manages scopes", "name": "Scope"}
@@ -59,8 +60,9 @@ async def create_global_scope(
     """
 
     scope_db = await add_scope_to_db(asession=asession, scope=scope_create)
+    user_db = await get_user_by_username(asession=asession, username=claims["sub"])
     return ScopeResponse(
-        created_by=int(claims["sub"]), scopes=[scope_db.name], user_id=claims["sub"]
+        created_by=user_db.username, scopes=[scope_db.name], user_id=user_db.user_id
     )
 
 
