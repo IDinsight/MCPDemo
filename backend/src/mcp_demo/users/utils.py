@@ -232,7 +232,6 @@ async def delete_scope_from_user(
         )
     )
     await asession.commit()
-    await asession.flush()
 
     # 4.
     user_db = await asession.scalar(

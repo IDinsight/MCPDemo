@@ -255,7 +255,6 @@ async def delete_scope_from_client(
     # 3.
     await asession.execute(stmt)
     await asession.commit()
-    await asession.flush()
 
     return await get_client_by_id(asession=asession, client_id=client_id)
 
