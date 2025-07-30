@@ -97,14 +97,12 @@ class BackendSettings(BaseSettings):
         "auth:refresh:{sub}:{client_id}:{token_hash}"
     )
     REDIS_CACHE_PREFIX_SUB_JTIS: str = "auth:sub_jtis:{grant_type}:{sub}"
+    REDIS_CACHE_PREFIX_USERS_CONSENT_KEY: Final[str] = "consent:{sub}:{client_id}"
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
 
     # Sentry
     SENTRY_DSN: Optional[str] = None
     SENTRY_TRACES_SAMPLE_RATE: float = 1.0
-
-    # Users
-    USERS_CONSENT_KEY_TEMPLATE: Final[str] = "consent:{sub}:{client_id}"
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="allow"

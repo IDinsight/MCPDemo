@@ -19,6 +19,7 @@ Demo of various MCP features.
 - [Local Clean up Instructions](#local-clean-up-instructions)
 - [Dev Startup Instructions](#dev-startup-instructions)
 - [Dev Clean up Instructions](#dev-clean-up-instructions)
+- [Full OAuth 2.1 Authorization Code + PKCE Flow with Swagger UI](#full-oauth-21-authorization-code--pkce-flow-with-swagger-ui)
 
 ## Setup Instructions
 
@@ -168,3 +169,50 @@ Demo of various MCP features.
 1. In the backend directory, run `deactivate`. This will exit out of the virtual environment created by `uv`.
 2. cd back to the root directory and run `make down-dev`. This will stop all dev containers.
 3. **[OPTIONAL]** In the root directory, run `make clean-docker`. This will remove all Docker images and containers created during the local testing setup. Use this command with caution as it will remove all Docker images and containers, not just those related to this project.
+
+## Full OAuth 2.1 Authorization Code + PKCE Flow with Swagger UI
+
+![OAuth PKCE Flow Diagram](./pkce.svg)
+
+Authorization Code + PKCE flow is all about a user delegating access to a client
+application in order for the client application to access resources on behalf of the
+user. Thus, the first step to create a user. This action provides the resource-owner
+(user) account that we'll later *log in* as during the Authorization Code flow.
+
+Swagger UI will act as a **public** client running in the browser, so we technically
+only need the client ID and at least one redirect URI (though we can also supply a
+dummy client secret which will be ignored).
+
+Logging in via `/auth/login` with the **user** credentials creates the session's CSRF
+cookies that mark the user as an *already-authenticated resource-owner*. When Swagger
+later calls the `/auth/authorize` endpoint, the server can immediately issue the
+authorization code without re-displaying a login page.
+
+The user then needs to grant consent to the client application by calling
+`/user/consents` with the client ID and scopes. This action creates a session cookie
+that marks the user as having granted consent to the client application. The server
+will later use this cookie to validate the client and scopes when the user clicks the
+`Authorize` button in Swagger UI. In addition, the backend application will also store
+the user’s consent in Redis under a key like `consent:{sub}:{client_id}`.
+
+When we click the `Authorize` button in the Swagger UI and choose the
+`OAuth2AuthorizationCode (OAuth2, authorizationCode with PKCE)` scheme to log in,
+Swagger will automatically call `/auth/authorize?...response_type=code...` in a pop-up
+window and send the code challenge (PKCE) for the **client application** to the server.
+The server finds the session cookie, validates the client and scopes, and
+**redirects back** to `/docs/oauth2-redirect?code=...&state=...`. The pop-up page
+automatically exchanges the code at `/auth/token` with the hidden `code_verifier`,
+receives the JWT, and stores it in Swagger's "authorized" state. The `Authorize` button
+triggers the Authorization Code + PKCE flow entirely in JavaScript. Swagger generates
+the `code_verifier`, computes the `code_challenge`, and finishes the back channel
+`/auth/token` call, which are all things a real single-page application would do.
+
+Now, when we call protected endpoints (e.g., `/user/admin-panel`), Swagger will attach
+`Authorization: Bearer <token>` to every "Try it out" request, so that protected
+endpoints succeeds.
+
+When we call the `/user/consents/{client_id}` endpoint to **revoke** user consent for a
+client ID, clicking the `Authorize` button in Swagger UI will now fail with a `403`
+response from `/auth/authorize`, because the consent record has been deleted.
+Previously issued access tokens may still work until they expire or are revoked
+manually.

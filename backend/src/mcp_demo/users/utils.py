@@ -30,7 +30,7 @@ from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.general import generate_hash, generate_random_string, verify_hash
 
 AUTH_ALLOWED_SCOPES = Settings.AUTH_ALLOWED_SCOPES
-USERS_CONSENT_KEY_TEMPLATE = Settings.USERS_CONSENT_KEY_TEMPLATE
+REDIS_CACHE_PREFIX_USERS_CONSENT_KEY = Settings.REDIS_CACHE_PREFIX_USERS_CONSENT_KEY
 
 
 class UserAlreadyExistsError(Exception):
@@ -258,7 +258,7 @@ async def delete_user_consent(
         The subject identifier (sub) of the user, typically their user ID.
     """
 
-    key = USERS_CONSENT_KEY_TEMPLATE.format(client_id=client_id, sub=sub)
+    key = REDIS_CACHE_PREFIX_USERS_CONSENT_KEY.format(client_id=client_id, sub=sub)
     await redis_client.delete(key)
 
 
@@ -432,7 +432,7 @@ async def get_user_consent(
         exists for the specified client ID and user.
     """
 
-    key = USERS_CONSENT_KEY_TEMPLATE.format(client_id=client_id, sub=sub)
+    key = REDIS_CACHE_PREFIX_USERS_CONSENT_KEY.format(client_id=client_id, sub=sub)
     raw = await redis_client.get(key)
 
     return [] if raw is None else json.loads(raw)
@@ -457,7 +457,7 @@ async def get_user_consents(
         the user has consented to for that client ID.
     """
 
-    pattern = USERS_CONSENT_KEY_TEMPLATE.format(client_id="*", sub=sub)
+    pattern = REDIS_CACHE_PREFIX_USERS_CONSENT_KEY.format(client_id="*", sub=sub)
     keys = await redis_client.keys(pattern)
     results: list[tuple[str, list[str]]] = []
     for key in keys:
@@ -542,7 +542,7 @@ async def save_user_consent(
         The subject identifier (sub) of the user, typically their user ID.
     """
 
-    key = USERS_CONSENT_KEY_TEMPLATE.format(client_id=client_id, sub=sub)
+    key = REDIS_CACHE_PREFIX_USERS_CONSENT_KEY.format(client_id=client_id, sub=sub)
     await redis_client.set(key, json.dumps(scopes, separators=(",", ":")))
 
 
