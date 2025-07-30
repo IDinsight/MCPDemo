@@ -127,6 +127,12 @@ def get_access_token_for_pkce(*, password: str, username: str) -> str:
                 then the server must stop the flow and send the browser back with an
                 error message and the rest of the steps never happen. Here, we do not
                 have a UI and thus, we mimic the user always consenting to the request.
+        **However**, we do not have a UI to present the consent screen, so we have to
+        mimic the user consenting to the request by calling the /user/consents endpoint
+        **first**. In reality, we would have the auth/authorize endpoint redirect the
+        user to a consent screen, and then the user would either approve or deny the
+        request. If the user approves, the server would then redirect back to the
+        redirect URI with a one-time `code` that can be redeemed for an access token.
     5. Grant client-specific consent for scopes (via /user/consents).
     6. Extract the one-time `code` from the redirect URI.
     6. Redeem the code at /auth/token with PKCE and client credentials.
@@ -172,6 +178,31 @@ def get_access_token_for_pkce(*, password: str, username: str) -> str:
     cookie_token = auth_login_response.cookies.get("access_token", None)
     assert cookie_token, "Cookie token not found in cookies."
 
+    # 5.
+    user_consents_url = "http://0.0.0.0:8000/user/consents"
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {cookie_token}",
+        "Content-Type": "application/json",
+    }
+    user_consents_payload = {"client_id": "client1", "scopes": ["admin"]}
+    user_consents_response = requests.post(
+        user_consents_url, headers=headers, json=user_consents_payload, timeout=60
+    )
+    if not user_consents_response.status_code == status.HTTP_201_CREATED:
+        logger.error("Failed user consents.")
+        raise RuntimeError(
+            f"Failed user consents from: {user_consents_url}. "
+            "Please check the server configuration."
+        )
+    try:
+        _ = user_consents_response.json()
+    except requests.exceptions.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Failed to decode JSON response from {user_consents_url}. "
+            "Please check the server configuration."
+        ) from exc
+
     # 3.
     code_verifier = secrets.token_urlsafe(64)
     code_challenge = (
@@ -202,31 +233,6 @@ def get_access_token_for_pkce(*, password: str, username: str) -> str:
             f"/auth/authorize failed ({auth_authorize_response.status_code}): "
             f"{auth_authorize_response.text or auth_authorize_response.reason}"
         )
-
-    # 5.
-    user_consents_url = "http://0.0.0.0:8000/user/consents"
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {cookie_token}",
-        "Content-Type": "application/json",
-    }
-    user_consents_payload = {"client_id": "client1", "scopes": ["admin"]}
-    user_consents_response = requests.post(
-        user_consents_url, headers=headers, json=user_consents_payload, timeout=60
-    )
-    if not user_consents_response.status_code == status.HTTP_201_CREATED:
-        logger.error("Failed user consents.")
-        raise RuntimeError(
-            f"Failed user consents from: {user_consents_url}. "
-            "Please check the server configuration."
-        )
-    try:
-        _ = user_consents_response.json()
-    except requests.exceptions.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"Failed to decode JSON response from {user_consents_url}. "
-            "Please check the server configuration."
-        ) from exc
 
     # 6.
     redirect_location = auth_authorize_response.headers["Location"]
