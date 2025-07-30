@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 # Package Library
 from mcp_demo.config import Settings
 
-CADDY_BACKEND_ROOT_API = os.getenv("CADDY_BACKEND_ROOT_API", "/api")
 CADDY_DOMAIN_NAME = os.getenv("CADDY_DOMAIN_NAME", "localhost")
 FASTAPI_PORT = Settings.FASTAPI_PORT
 
@@ -52,7 +51,7 @@ class OAuth2ClientCreate(OAuth2Client):
         description="Allowed redirect URIs for the authorization‑code flow",
         examples=[
             [
-                f"http://{CADDY_DOMAIN_NAME}:{FASTAPI_PORT}/{CADDY_BACKEND_ROOT_API}docs/oauth2-redirect",
+                f"http://{CADDY_DOMAIN_NAME}:{FASTAPI_PORT}/docs/oauth2-redirect",
                 "https://api.example.com/docs/oauth2-redirect",
             ]
         ],

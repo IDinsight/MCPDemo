@@ -217,6 +217,7 @@ def get_access_token_for_pkce(*, password: str, username: str) -> str:
     auth_authorize_response = session.get(
         "http://0.0.0.0:8000/auth/authorize",
         allow_redirects=False,  # Only need the Location header
+        headers={"Authorization": f"Bearer {cookie_token}"},  # For dev/prod environment
         params={
             "client_id": "client1",
             "code_challenge": code_challenge,

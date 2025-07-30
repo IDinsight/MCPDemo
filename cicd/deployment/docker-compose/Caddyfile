@@ -4,12 +4,11 @@
         reverse_proxy api:{$FASTAPI_PORT} {
 
             # Pass the real IP, drop client supplied values
-            header_up  -X-Forwarded-For                # Removes any existing header to prevent IP spoofing
-			header_up  X-Forwarded-For  {remote_host}  # Adds the real client's IP (not a proxy’s)
-			header_up  X-Real-IP       {remote_host}   # A common header used by many frameworks to detect user IP
-			header_up  X-Forwarded-Proto {scheme}      # Tells backend whether the original request was HTTP or HTTPS
-
-            header_up  Authorization {>Authorization}  # Allow client credentials for OAuth flows
+            header_up  -X-Forwarded-For                   # Removes any existing header to prevent IP spoofing
+			header_up  X-Forwarded-For   {remote_host}    # Adds the real client's IP (not a proxy’s)
+			header_up  X-Real-IP         {remote_host}    # A common header used by many frameworks to detect user IP
+			header_up  X-Forwarded-Proto {scheme}         # Tells backend whether the original request was HTTP or HTTPS
+            header_up  Authorization     {>Authorization} # Allow client credentials for OAuth flows
 
             transport http {
                 dial_timeout 100s
@@ -25,8 +24,8 @@
 
             # Same header hygiene
             header_up  -X-Forwarded-For
-			header_up  X-Forwarded-For  {remote_host}
-			header_up  X-Real-IP       {remote_host}
+			header_up  X-Forwarded-For   {remote_host}
+			header_up  X-Real-IP         {remote_host}
 			header_up  X-Forwarded-Proto {scheme}
 
             transport http {
