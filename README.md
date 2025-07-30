@@ -33,9 +33,12 @@ Demo of various MCP features.
 5. Allow `direnv` to load the root environment variables by running `direnv allow`.
 6. **[OPTIONAL (ONLY IF YOU WANT TO RUN IN DEV ENVIRONMENT)]** cd in the cicd/deployment/docker-compose directory of the repo and copy `docker-compose/.template.env` to `docker-compose/.env` and update:
     1. `AUTH_RSA_PASSPHRASE`: Run `openssl rand -base64 48` in terminal to generate a random passphrase.
-    2. `CSRF_SECRET_KEY`: Run `openssl rand -base64 32` in terminal to generate a random CSRF secret key.
-    3. `PATHS_PROJECT_DIR`: Set this to the absolute path of the root directory of the repo.
-    4. `PATHS_SECRETS_DIR`: Set this to `PATHS_PROJECT_DIR/secrets`.
+    2. `CADDY_BACKEND_ROOT_API`: Set this to `/api`.
+    3. `CADDY_BACKEND_ROOT_MCP`: Set this to `/mcp`.
+    4. `CADDY_DOMAIN_NAME`: Set this to `dev.localhost`.
+    5. `CSRF_SECRET_KEY`: Run `openssl rand -base64 32` in terminal to generate a random CSRF secret key.
+    6. `PATHS_PROJECT_DIR`: Set this to the absolute path of the root directory of the repo.
+    7. `PATHS_SECRETS_DIR`: Set this to `PATHS_PROJECT_DIR/secrets`.
 7. cd into the backend directory of the repo and:
     1. Copy `backend/.template.env` to `backend/.env`.
     2. Allow `direnv` to load the backend environment variables by running `direnv allow`.
@@ -51,7 +54,7 @@ Demo of various MCP features.
     1. From the backend directory, run `python src/mcp_demo/entries/fastapi_app.py`: This will start the FastAPI server on `http://localhost:8000`.
     2. Go to [http://localhost:8000/docs](http://localhost:8000/docs) to view and interact with the backend API routes.
 5. **Initialize user and client**
-    1. Create a new user using the `/user/register-first-user` endpoint in the FastAPI docs. Use the following credentials:
+    1. Create a new user using the `/user/register-first-user` endpoint in the FastAPI docs. Use the following payload:
         - `username`: `user1`
         - `password`: `user1`
         - You should see the following response:
@@ -59,14 +62,16 @@ Demo of various MCP features.
           {
               "username": "user1",
               "user_id": 1,
-              "created_by": 1,
+              "created_by": "user1",
               "recovery_codes": [
-                  ...,
+                   ...
               ],
-              "scopes": ["admin"]
+              "scopes": [
+                  "admin"
+              ]
           }
           ```
-    2. Create a new client using the `/client/register-first-client` endpoint in the FastAPI docs. Use the following credentials:
+    2. Create a new client using the `/client/register-first-client` endpoint in the FastAPI docs. Use the following payload (everything else can be left as their defaults):
         - `client_id`: `client1`
         - `scopes`: `["admin"]`
         - `secret`: `client1`
@@ -74,9 +79,17 @@ Demo of various MCP features.
           ```json
           {
               "client_id": "client1",
+              "allowed_code_challenge_methods": [
+                  "S256"
+              ],
               "created_by": "client1",
               "created_datetime_utc": ...,
               "is_active": true,
+              "pkce_enforced": true,
+              "redirect_uris": [
+                  "http://dev.localhost:8000/docs/oauth2-redirect",
+                  "https://api.example.com/docs/oauth2-redirect"
+              ],
               "scopes": ["admin"],
               "updated_datetime_utc": ...
           }
@@ -86,8 +99,9 @@ Demo of various MCP features.
 7. **Starting External MCP Server**
     1. From the backend directory, run `python src/mcp_demo/entries/mcp_server_external.py` in another terminal window: This will start the external MCP server on `http://localhost:8200`.
 8. **Calling Servers With MCP Client**
-    1. From the backend directory, run `python src/mcp_demo/entries/client_call.py --auth-type=bearer --include-external-servers --username=user1 --password=user1` in another terminal window: This will start the MCP client with Bearer authentication and make calls to the main and external MCP servers.
-    2. From the backend directory, run `python src/mcp_demo/entries/client_call.py --auth-type=oauth --include-external-servers --username=client1 --password=client1` in another terminal window: This will start the MCP client with OAuth and make calls to the main and external MCP servers.
+    1. From the backend directory, run `python src/mcp_demo/entries/client_call.py --grant-type=password --include-external-servers --username=user1 --password=user1` in another terminal window: This will start the MCP client with Password grant type and make calls to the main and external MCP servers.
+    2. From the backend directory, run `python src/mcp_demo/entries/client_call.py --grant-type=client_credentials --include-external-servers --username=client1 --password=client1` in another terminal window: This will start the MCP client with Client Credentials grant type and make calls to the main and external MCP servers.
+    3. From the backend directory, run `python src/mcp_demo/entries/client_call.py --grant-type=pkce --include-external-servers --username=user1 --password=user1` in another terminal window: This will start the MCP client with Authorization Code (+ PKCE) grant type and make calls to the main and external MCP servers. In this scenario, `user1` grants `admin` permission to `client1` in order to make calls to the MCP servers.
 
 ## Local Clean up Instructions
 
@@ -104,7 +118,7 @@ Demo of various MCP features.
     2. Run `source .venv/bin/activate`: This will activate the virtual environment created by `make fresh-env`.
 4. **Initialize user and client**
     1. Go to [http://localhost:8000/docs](http://localhost:8000/docs) to view and interact with the backend API routes.
-    2. Create a new user using the `/user/register-first-user` endpoint in the FastAPI docs. Use the following credentials:
+    2. Create a new user using the `/user/register-first-user` endpoint in the FastAPI docs. Use the following payload:
         - `username`: `user1`
         - `password`: `user1`
         - You should see the following response:
@@ -116,10 +130,12 @@ Demo of various MCP features.
               "recovery_codes": [
                   ...,
               ],
-              "scopes": ["admin"]
+              "scopes": [
+                  "admin"
+              ]
           }
           ```
-    3. Create a new client using the `/client/register-first-client` endpoint in the FastAPI docs. Use the following credentials:
+    3. Create a new client using the `/client/register-first-client` endpoint in the FastAPI docs. Use the following payload (everything else can be left as their defaults):
         - `client_id`: `client1`
         - `scopes`: `["admin"]`
         - `secret`: `client1`
@@ -127,16 +143,25 @@ Demo of various MCP features.
           ```json
           {
               "client_id": "client1",
+              "allowed_code_challenge_methods": [
+                  "S256"
+              ],
               "created_by": "client1",
               "created_datetime_utc": ...,
               "is_active": true,
+              "pkce_enforced": true,
+              "redirect_uris": [
+                  "http://dev.localhost:8000/docs/oauth2-redirect",
+                  "https://api.example.com/docs/oauth2-redirect"
+              ],
               "scopes": ["admin"],
               "updated_datetime_utc": ...
           }
           ```
 5. **Calling Servers With MCP Client (NB: No External Server Here)**
-    1. From the backend directory, run `python src/mcp_demo/entries/client_call.py --auth-type=bearer --username=user1 --password=user1` in another terminal window: This will start the MCP client with Bearer authentication and make calls to the **main server only**.
-    2. From the backend directory, run `python src/mcp_demo/entries/client_call.py --auth-type=oauth --username=client1 --password=client1` in another terminal window: This will start the MCP client with OAuth and make calls to the **main server only**.
+    1. From the backend directory, run `python src/mcp_demo/entries/client_call.py --grant-type=password --username=user1 --password=user1` in another terminal window: This will start the MCP client with Password grant type and make calls to the **main server only**.
+    2. From the backend directory, run `python src/mcp_demo/entries/client_call.py --grant-type=client_credentials --username=client1 --password=client1` in another terminal window: This will start the MCP client with Client Credentials grant type and make calls to the **main server only**.
+    3. From the backend directory, run `python src/mcp_demo/entries/client_call.py --grant-type=pkce --username=user1 --password=user1` in another terminal window: This will start the MCP client with Authorization Code (+ PKCE) grant type and make calls to the **main server only**. In this scenario, `user1` grants `admin` permission to `client1` in order to make calls to the main MCP server.
 
 ## Dev Clean up Instructions
 
