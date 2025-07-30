@@ -123,7 +123,7 @@ async def delete_scope_from_db(
         delete(user_scope_table).where(user_scope_table.c.scope_name == scope_name)
     )
     await asession.delete(scope_db)
-    await asession.flush()
+    await asession.commit()
 
     return True, True
 
