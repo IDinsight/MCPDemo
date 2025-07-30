@@ -615,7 +615,8 @@ async def reset_password(
     NB: When this endpoint is called, the assumption is that the calling user is the
     user that is requesting to reset their own password. This is because a user's
     password is universal and belongs to the user. Thus, only a user can reset their
-    own password.
+    own password. No login/authorization is required for this endpoint, the caller only
+    needs to provide a correct recovery code for their user account.
 
     Parameters
     ----------
