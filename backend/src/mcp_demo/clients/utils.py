@@ -133,7 +133,7 @@ async def add_scopes_to_client(
     added_scopes = list(requested - current)  # Only add missing scopes
     if not added_scopes:
         return []
-    client_db.scopes.extend(added_scopes)
+    client_db.scopes = list(current.union(added_scopes))
 
     # 4.
     await asession.commit()
@@ -240,6 +240,7 @@ async def delete_scope_from_client(
         client_db = await get_client_by_id(asession=asession, client_id=client_id)
     except Oauth2ClientNotFoundError:
         return None
+
     if scope_name not in client_db.scopes:
         return None
 
@@ -254,9 +255,9 @@ async def delete_scope_from_client(
     # 3.
     await asession.execute(stmt)
     await asession.commit()
-    await asession.refresh(client_db)
+    await asession.flush()
 
-    return client_db
+    return await get_client_by_id(asession=asession, client_id=client_id)
 
 
 async def get_client_by_id(*, asession: AsyncSession, client_id: str) -> Oauth2ClientDB:
