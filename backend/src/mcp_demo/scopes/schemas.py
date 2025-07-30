@@ -14,7 +14,7 @@ class Scope(BaseModel):
 
 
 class ScopeAssign(BaseModel):
-    """Pydantic model for assigning scopes to a user."""
+    """Pydantic model for assigning scopes to a user or client."""
 
     scopes: list[str] = Field(..., examples=[["admin", "read", "write"]])
 
@@ -28,15 +28,14 @@ class ScopeCreate(Scope):
 class ScopeDeleteResponse(Scope):
     """Pydantic model for scope deletion response."""
 
+    deleted_by: str
     removed: bool
-    user_id: int
 
 
 class ScopeResponse(ScopeAssign):
     """Pydantic model for the response of scope assignment."""
 
     created_by: str
-    user_id: int
 
 
 class ScopeUserResponse(BaseModel):

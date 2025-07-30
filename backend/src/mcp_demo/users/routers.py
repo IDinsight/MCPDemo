@@ -313,9 +313,7 @@ async def add_user_scope(
         asession=asession, scopes=scope_assign.scopes, user_db=user_db
     )
 
-    return ScopeResponse(
-        created_by=claims["sub"], scopes=added_scopes, user_id=user_db.user_id
-    )
+    return ScopeResponse(created_by=claims["sub"], scopes=added_scopes)
 
 
 @router.delete(
@@ -392,9 +390,7 @@ async def delete_user_scope(
         )
 
     return ScopeResponse(
-        created_by=int(claims["sub"]),
-        scopes=[s.name for s in user_db.scopes],
-        user_id=user_db.user_id,
+        created_by=claims["sub"], scopes=[s.name for s in user_db.scopes]
     )
 
 

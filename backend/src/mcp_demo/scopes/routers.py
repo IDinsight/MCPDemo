@@ -20,7 +20,6 @@ from mcp_demo.scopes.utils import (
     delete_scope_from_db,
     get_all_scopes_with_users,
 )
-from mcp_demo.users.utils import get_user_by_username
 from mcp_demo.utils.database import get_async_session
 
 TAG_METADATA = {"description": "Manages scopes", "name": "Scope"}
@@ -51,7 +50,7 @@ async def create_global_scope(
     asession
         The SQLAlchemy async session to use for all database connections.
     claims
-        The claims of the authenticated user, used to verify scopes.
+        The claims of the authenticated caller, used to verify scopes.
 
     Returns
     -------
@@ -60,14 +59,11 @@ async def create_global_scope(
     """
 
     scope_db = await add_scope_to_db(asession=asession, scope=scope_create)
-    user_db = await get_user_by_username(asession=asession, username=claims["sub"])
-    return ScopeResponse(
-        created_by=user_db.username, scopes=[scope_db.name], user_id=user_db.user_id
-    )
+    return ScopeResponse(created_by=claims["sub"], scopes=[scope_db.name])
 
 
 @router.get(
-    "/", response_model=list[ScopeUserResponse], summary="Get scope-user ID mapping"
+    "/", response_model=list[ScopeUserResponse], summary="Get scope-caller ID mapping"
 )
 @limiter.limit(RATE_LIMIT_LOGIN_RATE)
 async def get_scope_user_mapping(
@@ -136,7 +132,7 @@ async def delete_global_scope(
     Returns
     -------
     ScopeDeleteResponse
-        The response containing the scope name and whether it was removed.
+        The response containing the deleted scope name and the caller who deleted it.
     """
 
     deleted, existed = await delete_scope_from_db(
@@ -146,4 +142,6 @@ async def delete_global_scope(
     if not existed:
         raise HTTPException(status_code=status.HTTP_204_NO_CONTENT)
 
-    return ScopeDeleteResponse(name=scope_name, removed=deleted, user_id=claims["sub"])
+    return ScopeDeleteResponse(
+        deleted_by=claims["sub"], name=scope_name, removed=deleted
+    )
