@@ -172,7 +172,7 @@ Demo of various MCP features.
 
 ## Full OAuth 2.1 Authorization Code + PKCE Flow with Swagger UI
 
-![OAuth PKCE Flow Diagram](./pkce.svg)
+![OAuth PKCE Flow Diagram](./pkce.png)
 
 Authorization Code + PKCE flow is all about a user delegating access to a client
 application in order for the client application to access resources on behalf of the
