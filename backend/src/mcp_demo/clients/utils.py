@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import SecurityScopes
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,7 @@ from mcp_demo.auth.utils import _verify_caller, oauth_2_multi_scheme
 from mcp_demo.clients.models import Oauth2ClientDB
 from mcp_demo.clients.schemas import OAuth2ClientCreate, OAuth2ClientResetSecret
 from mcp_demo.config import Settings
+from mcp_demo.scopes.models import ScopeDB
 from mcp_demo.utils.database import get_async_session
 from mcp_demo.utils.general import generate_hash, verify_hash
 
@@ -71,6 +72,74 @@ class Oauth2ClientNotFoundError(Exception):
         super().__init__(f"Client not found: {error_msg}")
 
         self.error_msg = error_msg
+
+
+async def add_scopes_to_client(
+    *, asession: AsyncSession, client_db: Oauth2ClientDB, scopes: list[str]
+) -> list[str]:
+    """Add scopes to a client.
+
+    The process is as follows:
+
+    1. Validate scope names against the allowed scopes defined in the settings.
+    2. Check if the scopes exist in the database.
+    3. Append only missing scopes.
+    4. Commit the changes to the database.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    client_db
+        The client object to update in the database.
+    scopes
+        The list of scopes to add to the client.
+
+    Returns
+    -------
+    list[str]
+        A list of scope names that were successfully added to the client.
+
+    Raises
+    ------
+    HTTPException
+        If any of the provided scopes are not allowed.
+        If any of the provided scopes are not found in the database.
+    """
+
+    # 1.
+    allowed = set(AUTH_ALLOWED_SCOPES)
+    unknown_scopes = [s for s in scopes if s not in allowed]
+    if unknown_scopes:
+        raise HTTPException(
+            detail=f"Unknown scopes: {', '.join(unknown_scopes)}",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # 2.
+    scope_rows = (
+        await asession.scalars(select(ScopeDB).where(ScopeDB.name.in_(scopes)))
+    ).all()
+    missing_in_db = {s for s in scopes if s not in {row.name for row in scope_rows}}
+    if missing_in_db:
+        raise HTTPException(
+            detail=f"Scope(s) not seeded in DB: {', '.join(missing_in_db)}",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    # 3.
+    current = set(client_db.scopes or [])  # Guard against None
+    requested = set(scopes)
+    added_scopes = list(requested - current)  # Only add missing scopes
+    if not added_scopes:
+        return []
+    client_db.scopes.extend(added_scopes)
+
+    # 4.
+    await asession.commit()
+    await asession.refresh(client_db)
+
+    return added_scopes
 
 
 async def check_if_client_exists(
@@ -137,6 +206,57 @@ async def delete_client_from_db(*, asession: AsyncSession, client_id: str) -> No
 
     await asession.delete(client_db)
     await asession.commit()
+
+
+async def delete_scope_from_client(
+    *, asession: AsyncSession, client_id: str, scope_name: str
+) -> Oauth2ClientDB | None:
+    """Delete `scope_name` from the client identified by `client_id`.
+
+    The process is as follows:
+
+    1. Retrieve the client by `client_id`.
+    2. Update the `scopes` field by removing the specified `scope_name` using
+         `func.array_remove` to ensure the scope is removed from the list of scopes.
+    3. Commit the changes to the database and refresh the session.
+
+    Parameters
+    ----------
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    client_id
+        The client ID from which the scope association should be removed.
+    scope_name
+        The name of the scope to remove from the client.
+
+    Returns
+    -------
+    Oauth2ClientDB | None
+        The client object if the scope was successfully removed, otherwise `None`.
+    """
+
+    # 1.
+    try:
+        client_db = await get_client_by_id(asession=asession, client_id=client_id)
+    except Oauth2ClientNotFoundError:
+        return None
+    if scope_name not in client_db.scopes:
+        return None
+
+    # 2.
+    stmt = (
+        update(Oauth2ClientDB)
+        .where(Oauth2ClientDB.client_id == client_id)
+        .values(scopes=func.array_remove(Oauth2ClientDB.scopes, scope_name))
+        .execution_options(synchronize_session="fetch")
+    )
+
+    # 3.
+    await asession.execute(stmt)
+    await asession.commit()
+    await asession.refresh(client_db)
+
+    return client_db
 
 
 async def get_client_by_id(*, asession: AsyncSession, client_id: str) -> Oauth2ClientDB:

@@ -24,15 +24,19 @@ from mcp_demo.clients.schemas import (
 )
 from mcp_demo.clients.utils import (
     Oauth2ClientNotFoundError,
+    add_scopes_to_client,
     check_if_client_exists,
     check_if_clients_exist,
     delete_client_from_db,
+    delete_scope_from_client,
     get_client_by_id,
     get_current_client,
     reset_client_secret,
     save_client_to_db,
 )
 from mcp_demo.config import Settings
+from mcp_demo.scopes.schemas import ScopeAssign, ScopeCreate, ScopeResponse
+from mcp_demo.scopes.utils import add_scope_to_db, check_if_scope_exists
 from mcp_demo.utils.database import get_async_session
 
 TAG_METADATA = {"description": "Manages clients", "name": "Client"}
@@ -89,7 +93,8 @@ async def add_new_client(
     The process is as follows:
 
     1. Validate that the `client_id` does not already exist.
-    2. Save the new client to the database.
+    2. Add each scope in the `scopes` list to the scope database.
+    3. Save the new client to the database.
 
     Parameters
     ----------
@@ -119,6 +124,10 @@ async def add_new_client(
         )
 
     # 2.
+    for scope in oauth2_client.scopes:
+        await add_scope_to_db(asession=asession, scope=ScopeCreate(name=scope))
+
+    # 3.
     client_db = await save_client_to_db(asession=asession, client=oauth2_client)
 
     return OAuth2ClientResponse(
@@ -135,6 +144,127 @@ async def add_new_client(
 
 
 @router.post(
+    "/{client_id}/scope", response_model=ScopeResponse, summary="Add scope to client"
+)
+async def add_client_scope(
+    client_id: str,
+    scope_assign: ScopeAssign,
+    asession: AsyncSession = Depends(get_async_session),
+    claims: dict = require_scopes(required_scopes={"admin"}),
+) -> ScopeResponse:
+    """Add scopes to a client.
+
+    Parameters
+    ----------
+    client_id
+        The client ID to which the scopes will be assigned.
+    scope_assign
+        The scopes to assign to the client.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    claims
+        The claims of the authenticated client, used to verify scopes.
+
+    Returns
+    -------
+    ScopeResponse
+        The response containing the client ID and the list of scopes assigned to the
+        client.
+
+    Raises
+    ------
+    HTTPException
+        If the calling client does not have the 'admin' scope.
+    """
+
+    client_db = await get_client_by_id(asession=asession, client_id=client_id)
+
+    added_scopes = await add_scopes_to_client(
+        asession=asession, client_db=client_db, scopes=scope_assign.scopes
+    )
+
+    return ScopeResponse(created_by=claims["sub"], scopes=added_scopes)
+
+
+@router.delete(
+    "/{client_id}/{scope_name}",
+    response_model=ScopeResponse,
+    summary="Delete client scope",
+)
+async def delete_client_scope(
+    client_id: str,
+    scope_name: str,
+    asession: AsyncSession = Depends(get_async_session),
+    claims: dict = require_scopes(required_scopes={"admin"}),
+) -> ScopeResponse:
+    """Delete a scope from a client.
+
+    The process is as follows:
+
+    1. Check if the scope exists in the database.
+    2. Check if the client exists in the database.
+    3. Delete the scope from the client.
+    4. If the scope is not assigned to the client, raise an error.
+
+    Parameters
+    ----------
+    client_id
+        The client ID from which the scope will be deleted.
+    scope_name
+        The name of the scope to delete from the client.
+    asession
+        The SQLAlchemy async session to use for all database connections.
+    claims
+        The claims of the authenticated client, used to verify scopes.
+
+    Returns
+    -------
+    ScopeResponse
+        The response containing the client ID and the list of scopes remaining for the
+        client.
+
+    Raises
+    ------
+    HTTPException
+        If the calling client does not have the 'admin' scope.
+        If the scope does not exist.
+        If the scope is not assigned to the client.
+    """
+
+    # 1.
+    if not await check_if_scope_exists(
+        asession=asession, scope=ScopeCreate(name=scope_name)
+    ):
+        raise HTTPException(
+            detail=f"Scope '{scope_name}' does not exist.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    # 2.
+    try:
+        client_db = await get_client_by_id(asession=asession, client_id=client_id)
+    except Oauth2ClientNotFoundError as exc:
+        raise HTTPException(
+            detail=f"Client ID not found: {client_id}",
+            status_code=status.HTTP_404_NOT_FOUND,
+        ) from exc
+
+    # 3.
+    client_db = await delete_scope_from_client(
+        asession=asession, client_id=client_db.client_id, scope_name=scope_name
+    )
+
+    # 4.
+    if not client_db:
+        raise HTTPException(
+            detail=f"Scope '{scope_name}' not found for client ID {client_id}.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    return ScopeResponse(created_by=claims["sub"], scopes=client_db.scopes)
+
+
+@router.post(
     "/register-first-client",
     response_model=OAuth2ClientResponse,
     summary="Register first client",
@@ -148,7 +278,9 @@ async def register_first_client(
     The process is as follows:
 
     1. Check if any clients already exist in the database. If so, raise an error.
-    2. Save the first client to the database.
+    2. Ensure the `admin` scope is included in the scopes for the very first client.
+    3. Add scopes to the scope database.
+    4. Save the first client to the database.
 
     Parameters
     ----------
@@ -178,6 +310,14 @@ async def register_first_client(
         )
 
     # 2.
+    if "admin" not in oauth2_client.scopes:
+        oauth2_client.scopes.append("admin")
+
+    # 3.
+    for scope in oauth2_client.scopes:
+        await add_scope_to_db(asession=asession, scope=ScopeCreate(name=scope))
+
+    # 4.
     client_db = await save_client_to_db(asession=asession, client=oauth2_client)
 
     return OAuth2ClientResponse(
