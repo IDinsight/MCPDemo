@@ -32,13 +32,11 @@ if __name__ == "__main__":
 # Package Library
 from mcp_demo.config import Settings
 from mcp_demo.utils.general import yaml_serializer
-from mcp_demo.utils.mcp_server import create_mcp_server_app
+from mcp_demo.utils.mcp_server import __MCP, register_server_components
 
 assert (
     sys.version_info.major >= 3 and sys.version_info.minor >= 11
 ), "MCP Demo requires at least Python 3.11!"
-
-EXTERNAL_FASTMCP_MOUNT_PATH = Settings.EXTERNAL_FASTMCP_MOUNT_PATH
 
 # Instantiate typer apps for the command line interface.
 cli = typer.Typer()
@@ -73,23 +71,6 @@ async def lifespan_external_server(server: FastMCP) -> AsyncIterator[dict[str, A
         server_tool_names = list(server_tools.keys())
         logger.info(f"Available tools external server-side: {server_tool_names}")
 
-        server_resources = await server.get_resources()
-        server_resource_names = list(server_resources.keys())
-        logger.info(
-            f"Available resources external server-side: {server_resource_names}"
-        )
-
-        server_resource_templates = await server.get_resource_templates()
-        server_resource_template_names = list(server_resource_templates.keys())
-        logger.info(
-            f"Available resource templates external server-side: "
-            f"{server_resource_template_names}"
-        )
-
-        server_prompts = await server.get_prompts()
-        server_prompt_names = list(server_prompts.keys())
-        logger.info(f"Available prompts external server-side: {server_prompt_names}")
-
         # 2.
         logger.log("CELEBRATE", "Ready to roll! 🚀")
 
@@ -100,20 +81,27 @@ async def lifespan_external_server(server: FastMCP) -> AsyncIterator[dict[str, A
 
 
 # Create the MCP server application instance.
-app_external, _ = create_mcp_server_app(
-    auth=None,  # No authentication for the external server
-    exclude_tags={"deprecated", "internal"},  # Hide these tagged components
-    instructions="This is the external MCP server.",
-    lifespan=lifespan_external_server,
-    mask_error_details=True,  # Mask error details in responses and defer to ToolError for security reasons
-    mcp_app_mount_path=EXTERNAL_FASTMCP_MOUNT_PATH,
-    on_duplicate_prompts="error",
-    on_duplicate_resources="error",
-    on_duplicate_tools="error",
-    register_modules={"mcp_demo.tools.external_tools"},
-    server_name="External Server",
-    tool_serializer=yaml_serializer,
-)
+server_name = "External Server"
+if server_name in __MCP:
+    app = __MCP[server_name][0]
+else:
+    mcp = FastMCP(
+        auth=None,
+        exclude_tags={"deprecated", "internal"},  # Hide these tagged components
+        instructions="This is the external MCP server.",
+        lifespan=lifespan_external_server,
+        mask_error_details=True,  # Mask error details in responses and defer to ToolError for security reasons
+        name=server_name,
+        on_duplicate_prompts="error",
+        on_duplicate_resources="error",
+        on_duplicate_tools="error",
+        tool_serializer=yaml_serializer,
+    )
+    app = mcp.http_app(path=f"/{Settings.EXTERNAL_FASTMCP_MOUNT_PATH}/")
+    __MCP[server_name] = (app, mcp)
+    register_server_components(
+        register_modules={"mcp_demo.tools.external_tools"}, server_name=server_name
+    )
 
 
 @cli.command()
@@ -161,7 +149,7 @@ def main(
     project_dir = Path(os.getenv("PATHS_PROJECT_DIR", ""))
     assert project_dir.is_dir(), f"'{project_dir}' is not a directory."
     uvicorn.run(
-        "mcp_demo.entries.mcp_server_external:app_external",
+        "mcp_demo.entries.mcp_server_external:app",
         host=host,
         port=port,
         log_config=None,  # Disable Uvicorn's default logging config

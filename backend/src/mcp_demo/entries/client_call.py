@@ -206,7 +206,7 @@ async def _run_client(
             logger.info(f"Content: {message.content}\n")
 
         error_correction_result = await client.get_prompt(
-            f"{server_prefix}/chat_error_correction",
+            f"{server_prefix}chat_error_correction",
             {"error_info_str": "some complex error trace"},
         )
         message = error_correction_result.messages[0]

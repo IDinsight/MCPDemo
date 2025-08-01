@@ -42,6 +42,7 @@ app = create_fastapi_app()
 
 @cli.command()
 def main(
+    *,
     host: str = typer.Option(
         Settings.FASTAPI_HOST,
         "--host",

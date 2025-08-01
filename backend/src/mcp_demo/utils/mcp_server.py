@@ -4,20 +4,46 @@
 from __future__ import annotations
 
 # Standard Library
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, Callable
+from typing import Any, AsyncIterator, Callable
 
 # Third Party Library
 from fastmcp import FastMCP
 from fastmcp.server.auth import BearerAuthProvider
+from fastmcp.server.middleware.error_handling import (
+    ErrorHandlingMiddleware,
+    RetryMiddleware,
+)
+from fastmcp.server.middleware.logging import LoggingMiddleware
+from fastmcp.server.middleware.rate_limiting import SlidingWindowRateLimitingMiddleware
+from fastmcp.server.middleware.timing import DetailedTimingMiddleware
 from loguru import logger
+from redis import asyncio as aioredis
 from starlette.applications import Starlette
 
 # Package Library
 from mcp_demo.config import Settings
-from mcp_demo.utils.general import convert_to_list
+from mcp_demo.middlewares.mcp_ import TagBasedMiddleware
 
 __MCP: dict[str, tuple[Starlette, FastMCP]] = {}
+
+
+@dataclass
+class ChatMCPServerContext:
+    """Context for the chat MCP server application."""
+
+    redis_client: aioredis.Redis
+
+
+@dataclass
+class MainMCPServerContext:
+    """Context for the main MCP server application."""
+
+    runtime_context: str
+
+    some_text: str = "This is the context for the main MCP server."
 
 
 class MockMCP:
@@ -136,85 +162,115 @@ class MockMCP:
         return repr(self)
 
 
-def create_mcp_server_app(
-    *,
-    auth: BearerAuthProvider | None = None,
-    lifespan: Callable | None = None,
-    mcp_app_mount_path: str = Settings.FASTMCP_MOUNT_PATH,
-    middleware: Callable | list[Callable] | None = None,
-    register_modules: set[str] | None = None,
-    server_name: str,
-    **kwargs: Any,
-) -> tuple[Starlette, FastMCP]:
+def create_mcp_server_app() -> Starlette:
     """Create the MCP server application for the backend.
 
     The process is as follows:
 
-    1. If the MCP server application instance already exists, return it.
-    2. Create an MCP server instance.
+    1. If the MCP server application instances already exist, then return the main MCP
+        server application only (the chat MCP server is mounted to the main MCP server
+        application).
+    2. Create the MCP server instance.
     3. Create a Starlette application that mounts the MCP server instance at the
         specified path.
     4. Store the MCP server application instance in a global variable for later use.
     5. Register server components such as tools, resources, prompts, etc. with the MCP
         server.
 
-    Parameters
-    ----------
-    auth
-        An optional authentication provider for the MCP server. If not provided, the
-        server will not have authentication enabled.
-    lifespan
-        An optional lifespan context manager for the MCP server application. If not
-        provided, the MCP server will use its default lifespan management.
-    mcp_app_mount_path
-        The path at which the MCP server application will be mounted.
-    middleware
-        An optional middleware or list of middlewares to apply to the MCP server
-        application. This can be used to add custom processing for requests and
-        responses. The order provided in the list will be preserved. Middleware should
-        be passed like `my_middleware(...)`, NOT `my_middleware` (without parentheses).
-    register_modules
-        A set of module paths to register with the MCP server. This allows for dynamic
-        registration of tools, resources, and prompts defined in those modules.
-    server_name
-        The name of the MCP server instance. This is also used to identify the server
-        instance in the global variable `__MCP`.
-    kwargs
-        Additional keyword arguments passed explicitly to the `FastMCP` constructor.
-
     Returns
     -------
-    tuple[Starlette, FastMCP]
-        A tuple containing the Starlette application and the FastMCP server instance.
-        The Starlette application can be mounted in a FastAPI app, and the FastMCP
-        server instance can be used to interact with the MCP server.
+    Starlette
+        The Starlette application instance that serves as the MCP server.
     """
 
     # 1.
-    if server_name in __MCP:
-        return __MCP[server_name]
+    if "Main Server" in __MCP and "Chat Server" in __MCP:
+        return __MCP["Main Server"][0]
 
+    # Main Server
     # 2.
+    server_name = "Main Server"
     mcp = FastMCP(
-        auth=auth,
-        lifespan=lifespan,
-        middleware=convert_to_list(middleware or []),
+        auth=get_bearer_auth_provider(),  # Use BearerAuthProvider for authentication
+        exclude_tags={"deprecated", "internal"},  # Hide these tagged components
+        instructions="This is the main MCP server.",
+        lifespan=lifespan_main_server,
+        mask_error_details=False,
+        middleware=[
+            ErrorHandlingMiddleware(include_traceback=True, transform_errors=True),
+            RetryMiddleware(
+                max_retries=3, retry_exceptions=(ConnectionError, TimeoutError)
+            ),
+            SlidingWindowRateLimitingMiddleware(max_requests=1000, window_minutes=1),
+            DetailedTimingMiddleware(),
+            LoggingMiddleware(include_payloads=True, max_payload_length=1000),
+            TagBasedMiddleware(),
+        ],
         name=server_name,
-        **kwargs,
+        on_duplicate_prompts="error",
+        on_duplicate_resources="error",
+        on_duplicate_tools="error",
     )
 
     # 3.
-    app = mcp.http_app(path=f"/{mcp_app_mount_path}/")
+    app = mcp.http_app(path=f"/{Settings.FASTMCP_MOUNT_PATH}/")
 
     # 4.
     __MCP[server_name] = (app, mcp)
 
     # 5.
     register_server_components(
-        register_modules=register_modules, server_name=server_name
+        register_modules={
+            "mcp_demo.prompts.base",
+            "mcp_demo.resources.basic_resources",
+            "mcp_demo.tools.basic_tools",
+        },
+        server_name=server_name,
     )
 
-    return app, mcp
+    # Chat Server
+    # 2.
+    server_name = "Chat Server"
+    mcp_chat = FastMCP(
+        auth=get_bearer_auth_provider(),  # Use BearerAuthProvider for authentication
+        exclude_tags={"deprecated", "internal"},  # Hide these tagged components
+        instructions="This MCP server handles LLM chat functionalities.",
+        lifespan=lifespan_chat_server,
+        mask_error_details=True,  # Mask error details in responses and defer to ToolError for security reasons
+        middleware=[
+            ErrorHandlingMiddleware(include_traceback=True, transform_errors=True),
+            RetryMiddleware(
+                max_retries=3, retry_exceptions=(ConnectionError, TimeoutError)
+            ),
+            SlidingWindowRateLimitingMiddleware(max_requests=1000, window_minutes=1),
+            DetailedTimingMiddleware(),
+            LoggingMiddleware(include_payloads=True, max_payload_length=1000),
+            TagBasedMiddleware(),
+        ],
+        name=server_name,
+        on_duplicate_prompts="error",
+        on_duplicate_resources="error",
+        on_duplicate_tools="error",
+    )
+
+    # 3.
+    app_chat = mcp.http_app(path=f"/{Settings.FASTMCP_MOUNT_PATH}/")
+
+    # 4.
+    __MCP[server_name] = (app_chat, mcp_chat)
+
+    # 5.
+    register_server_components(
+        register_modules={"mcp_demo.prompts.chat"}, server_name=server_name
+    )
+
+    # Mount the chat MCP server application to the main MCP server application.
+    # NB: FastMCP automatically uses proxy mounting when the mounted server has a
+    # custom lifespan but you can override this behavior by setting `as_proxy=False`.
+    # ref: https://gofastmcp.com/servers/composition#direct-vs-proxy-mounting
+    mcp.mount(mcp_chat, prefix="chat")
+
+    return app
 
 
 def get_bearer_auth_provider() -> BearerAuthProvider:
@@ -285,6 +341,115 @@ def get_mcp_server(*, server_name: str) -> FastMCP | MockMCP:
         raise KeyError(f"MCP server instance was not found: {server_name}")
 
     return __MCP[server_name][1]  # Return the FastMCP instance
+
+
+@asynccontextmanager
+async def lifespan_chat_server(server: FastMCP) -> AsyncIterator[ChatMCPServerContext]:
+    """Lifespan events for the chat MCP server application.
+
+    The process is as follows:
+
+    1. List the chat MCP server prompts (for demonstration purposes).
+    2. Initialize Redis client for the chat MCP server.
+    3. Yield control to the chat MCP server application.
+    4. Close the Redis connection when the chat MCP server application finishes.
+    5. Perform any necessary cleanup when the chat MCP server application finishes.
+
+    Parameters
+    ----------
+    server
+        The chat MCP server instance.
+
+    Yields
+    ------
+    AsyncIterator[ChatMCPServerContext]
+        A context manager that provides control to the chat MCP server application.
+    """
+
+    logger.info("Starting chat MCP server application...")
+
+    redis_client: aioredis.Redis | None = None
+
+    try:
+        # 1.
+        server_prompts = await server.get_prompts()
+        server_prompt_names = list(server_prompts.keys())
+        logger.info(f"Available prompts chat server-side: {server_prompt_names}")
+
+        # 2.
+        logger.info("Initializing Redis client...")
+        redis_client = await aioredis.from_url(
+            f"{Settings.REDIS_URL}", decode_responses=True
+        )
+        assert isinstance(redis_client, aioredis.Redis)
+        logger.success("Redis connection established!")
+
+        # 3.
+        logger.log("CELEBRATE", "Ready to roll! 🚀")
+
+        yield ChatMCPServerContext(redis_client=redis_client)
+    finally:
+        if isinstance(redis_client, aioredis.Redis):
+            # 4.
+            logger.info("Closing Redis connection...")
+            await redis_client.aclose()
+            logger.success("Redis connection closed!")
+
+        # 5.
+        logger.success("Chat MCP server application finished!")
+
+
+@asynccontextmanager
+async def lifespan_main_server(server: FastMCP) -> AsyncIterator[MainMCPServerContext]:
+    """Lifespan events for the main MCP server application.
+
+    The process is as follows:
+
+    1. List the main MCP server components (for demonstration purposes).
+    2. Yield control to the main MCP server application.
+    3. Perform any necessary cleanup when the main MCP server application finishes.
+
+    Parameters
+    ----------
+    server
+        The main MCP server instance.
+
+    Yields
+    ------
+    AsyncIterator[MainMCPServerContext]
+        A context manager that provides control to the main MCP server application.
+    """
+
+    logger.info("Starting main MCP server application...")
+
+    try:
+        # 1.
+        server_tools = await server.get_tools()
+        server_tool_names = list(server_tools.keys())
+        logger.info(f"Available tools main server-side: {server_tool_names}")
+
+        server_resources = await server.get_resources()
+        server_resource_names = list(server_resources.keys())
+        logger.info(f"Available resources main server-side: {server_resource_names}")
+
+        server_resource_templates = await server.get_resource_templates()
+        server_resource_template_names = list(server_resource_templates.keys())
+        logger.info(
+            f"Available resource templates main server-side: "
+            f"{server_resource_template_names}"
+        )
+
+        server_prompts = await server.get_prompts()
+        server_prompt_names = list(server_prompts.keys())
+        logger.info(f"Available prompts main server-side: {server_prompt_names}")
+
+        # 2.
+        logger.log("CELEBRATE", "Ready to roll! 🚀")
+
+        yield MainMCPServerContext(runtime_context="new context")
+    finally:
+        # 3.
+        logger.success("Main MCP server application finished!")
 
 
 def register_server_components(
